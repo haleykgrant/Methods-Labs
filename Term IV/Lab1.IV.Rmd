@@ -1,0 +1,703 @@
+---
+title: "Lab 1: Random/Mixed Effects Models"
+author: "Haley Grant"
+date: "3/23/2020"
+output:
+  html_document:
+    highlight: tango
+    number_sections: no
+    theme: cosmo
+    toc: TRUE
+    toc_float: TRUE
+    code_folding: "hide"
+    
+---
+
+<style>
+pre code, pre, code {
+  white-space: pre !important;
+  overflow-x: scroll !important;
+  word-break: keep-all !important;
+  word-wrap: initial !important;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(width=200)
+```
+
+
+Today I will be going over an example from this [online tutorial](https://web.stanford.edu/class/psych252/section/Mixed_models_tutorial.html) that I think does a good job explaining mixed effects models. We will begin with linear mixed models (extension of linear models to incorporate random effects), and leave GLMMs (Generalized Linear Mixed Models) for later in the term.
+
+# Overview of Mixed Models
+
+__What are mixed models and why do we use them?__
+
+In a typical linear model setting, we assume observations are independently drawn from a normal distribution. However, in real data we often do not have independent observations. For example, if we have __clusters__ in our data (think schools, hospitals, etc.) or __repeated observations__ from the same individual, this independence assumption is no longer valid. Recall that Hongkai mentioned in class that this results in overdispersion in the marginal model for our outcome $y_{ij}$. That is, if we have something like
+
+$$y_{ij}|a_i=\mu + a_i+\epsilon_{ij} \\ \text{ where } a_i\sim N(0,\sigma_a^2)  \text{ and } \epsilon_{ij}\sim N(0,\sigma^2) $$
+then although the marginal mean remains unchanged:
+$$E(y_{ij}) = E\big[E(y_{ij}|a_i)\big]=E(\mu+a_i+\epsilon_{ij})=\\E(\mu)+E(a_i)+E(\epsilon_{ij})\\=\mu, $$ 
+if we look at the variance of the model, conditional on the group/cluster we have 
+
+$$var(y_{ij}|a_i)=\sigma^2. $$
+However, marginally we have overdisperion:
+$$var(y_{ij})=\sigma^2+\sigma^2_a. $$
+
+That is, if we do not account for the underlying structure in our data, our estimate standard errors are going to be invalid. Linear mixed models allow us to account for such __correlations__ in our data by incorporating random effects. There are two main types of random effects:
+
+* __Random intercepts:__ which allow individuals/clusters to vary at baseline.
+* __Random slopes:__ which allow the effect of certain covariates to affect individuals differently.
+
+Recall that when we include random effects in our models, it is just the variability that we care about estimating. On average, these effects are zero so they only contribute to the marginal model by adding an additional source of variability.
+__For any effects that we want to get point estimates of (like the effect of a treatment on some outcome), we should model these with fixed effects__.
+
+Agresti has a nice discussion of when to choose a (G)LMM vs a marginal model (section 9.1.5). An overview is:
+
+* The mixed model approach is preferable when you want to estimate cluster-specific effects, estimate their variability, specify a mechanism for generating nonnegative association among clustered observations, or model the joint distribution.
+* When we want to model between-cluster effects (think smokers vs non-smokers on some outcome), it can be simpler to model them using marginal models.
+* Between-group fixed effects in a mixed model only apply when the random effect takes the same value in each group.  (see illustration below)
+* Mixed models are cluster-specific models in that both within-cluster and between-cluster effects apply conditional on the random effects.
+* Mixed models imply marginal models (integrate out random effects--not always closed form for implied marginal models), while marginal models are less general in that they do not imply a mixed model.
+
+__Illustration__: Let $y_{ij}$ be the lung capacity of patient $j$ at hospital $i$. Let $x_{ij}$ be an indicator for smoking status of patient $j$ at hospital $i$. Then we could write the following mixed effects model:
+$$y_{ij} = \beta_0 + \beta_1*x_{ij}+a_{i} + \epsilon_{ij} \\\implies E[y_{ij}|a_i] = \beta_0+\beta_1*x_{ij}+a_i$$
+where $a_i$ is a random effect for hospital (we could also include other covariates but for simplicity we just fit an intercept-only model). Consider estimating $\beta_1$. We know,
+
+$$\beta_1 =  \big(\beta_0+\beta_1*1+a_i\big) -  \big(\beta_0+\beta_1*0+a_i\big)\\=E[y_{ij}| x_{ij}=1,a_i]-E[y_{ij}| x_{ij}=0,a_i]
+. $$
+This, however, requires the same value of the random effect $a_i.$ If we consider a smoker from hospital $i$ and a non-smoker from hospital $i'$ we get
+
+$$E[y_{ij}|x_{ij}=1,a_i]−E[y_{i'j}|x_{i'j}=0,a_{i'}] =\\ \big(\beta_0+\beta_1*1+a_i\big) -  \big(\beta_0+\beta_1*0+a_{i'}\big) \\=\beta_1 + (a_i-a_{i'})$$
+does not, in general equal $\beta_1$. That means that the interpretation of $\beta_1$ is the average effect of smoking status on lung capacity _at the same value of the random effect $a_i$_.
+
+# Example
+
+The example we will use today studies the _relationship between voice pitch and politeness_. The data set contains measurements on 6 individuals (3 male, 3 female) who are asked to respond to 7 different scenarios explaining why they are late to either a boss (formal case) or friend (informal). So we have a total of 14 observations (2 per scenario) for each subject. For each of these 14 responses, voice pitch was measured. __Hint: we have repeated measures on the individual level.__
+
+## The Data
+
+Let's take a look at the data.
+
+```{r}
+# load packages
+
+library(pacman)
+p_load(ggplot2,
+       tidyverse,
+       knitr,
+       kableExtra,
+       readr,
+       janitor,
+       lme4, # for fitting linear mixed models
+       lattice) # for plotting random effects
+
+
+```
+
+```{r message=F}
+dat = read_csv("http://www.bodowinter.com/uploads/1/2/9/3/129362560/politeness_data.csv")
+
+head(dat)
+
+```
+
+Since we have repeated measurements (7 per individual per condition), we can look at the data using boxplots to see the distribution across different subjects. 
+
+```{r warning=FALSE}
+dat%>%
+  ggplot(aes(x = attitude, y = frequency, color = subject))+
+  geom_boxplot()+
+  theme_bw()+
+  facet_wrap(.~subject, ncol = 6)
+
+```
+
+Here we can see a few patterns:
+
+1. Pitch for polite (formal) responses tends to be lower than pitch for informal responses.
+2. Females tend to have respond in higher pitches than males, regardless of the scenario.
+3. There seems to be within-subject and between-subject variability.
+
+Let's look a bit more at the gender effect:
+
+```{r warning=FALSE, message=FALSE}
+dat%>%
+  mutate(attitude = factor(attitude, levels = c("inf","pol")))%>%
+  ggplot(aes(x = attitude, y = frequency))+
+  geom_boxplot(aes(color = gender))+
+  theme_bw()+
+  labs(y = "Average Frequency\n (Across Scenarios and Subjects)", x = "Attitude")
+
+dat%>%
+  group_by(subject, attitude)%>%
+  summarise(frequency = mean(frequency, na.rm = T), gender = first(gender))%>%
+  mutate(attitude = factor(attitude, levels = c("inf","pol")))%>%
+  rename(Gender = gender)%>%
+  ggplot(aes(x = attitude, y = frequency))+
+  geom_line(aes(group = subject, color = Gender))+
+  theme_bw()+
+  labs(y = "Average Pitch", title = "Pitch Change by Gender", x = "Attitude")+
+  theme(plot.title = element_text(hjust = .5))
+
+
+```
+
+We can also look at the individual effects:
+
+```{r warning=F}
+dat%>%
+  mutate(attitude = factor(attitude, levels = c("inf","pol")))%>%
+  ggplot(aes(x = attitude, y = frequency))+
+  geom_line(aes(group = interaction(subject, scenario), color = subject))+
+  geom_point(aes(color = subject))+
+  theme_bw()+
+  labs(y = "Average Pitch", title = "Pitch Change by Gender", x = "Attitude")+
+  theme(plot.title = element_text(hjust = .5), legend.position = "none")+
+  facet_wrap(.~subject)
+
+```
+
+
+```{r warning=F, message=F}
+inf = which(dat$attitude=="inf")
+pol = which(dat$attitude=="pol")
+
+
+data.frame(informal = dat$frequency[inf],polite = dat$frequency[pol], subject = dat$subject[pol])%>%
+  ggplot(aes(x = informal, y = polite))+
+  geom_point(aes(color= subject) )+
+  theme_bw()+
+  geom_smooth(method = lm, se = F, color = "black", size = .5)+
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed")
+
+
+```
+
+This plot shows that there seems to be some clustering by subject that we should account for. It also shows a pretty strong relationship between the pitch of polite and informal responses, which we will return to later.
+
+## Fitting a Model
+
+### Random Intercept Only
+
+
+Let's first begin by fitting a simple intercept-only model, where here the intercept is a random effect that is allowed to vary by subject.
+
+That is, we fit the model
+
+$$y_{ij}=\beta_0 + a_i + \epsilon_{ij} $$
+where $a_i$ is a random intercept for individual $i$. The R function we will use to fit these models is `lmer()` from the lme4 package. The syntax is as follows:
+
+`myfit = lmer(response ~ {fixed effects} + ( {random effects} | grouping factor), data  = mydata)`
+
+For example, if we want to fit a model with only intercepts (fixed and random) by subject we can use the command:
+
+`myfit = lmer(response ~ 1 + ( 1 | subject), data  = mydata)`
+
+
+```{r warning=F}
+
+fit.randint = lmer(frequency ~ (1|subject), data = dat)
+
+summary(fit.randint)
+```
+
+We can check the predicted (fitted) random effects for each subject and compare them to the observed means.
+
+```{r warning=F, message=F}
+
+dat%>%
+  group_by(subject)%>%
+  summarise(mean = mean(frequency, na.rm = T))%>%
+  bind_cols(coef(fit.randint)$subject[1])%>%
+  bind_cols(fixef(fit.randint)['(Intercept)'] + ranef(fit.randint)$subject)%>%
+  rename(`Observed` = mean, `Fitted` = `(Intercept)`, `Int. + Rand. Int.` = `(Intercept)1`,Subject = subject )%>%
+  kable( align = "c")%>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+
+```
+
+Here we can see that the random intercept is nearly identical to the observed means. Note that there are two ways to extract these estimates. Either use the `coef()` command to get the combined effects per subject or use `fixef()`+`ranef()` to see both parts on their own.
+
+```{r}
+fixef(fit.randint)
+ranef(fit.randint)
+```
+
+We can take a look at the model fit using a plot
+
+```{r warning=F}
+
+est = data.frame(estimated_mean = unlist(coef(fit.randint)$subject[1]), subject = row.names(coef(fit.randint)$subject[1]), marginal_mean = rep(unlist(fixef(fit.randint)),6), row.names = NULL)
+
+dat%>%
+  full_join(est, by = "subject")%>%
+  ggplot(aes(x = attitude, y = frequency))+
+  geom_point(aes(color = subject), size = .5)+
+  theme_bw()+
+  geom_hline(aes(yintercept = estimated_mean), linetype = "dashed")+
+  geom_hline(aes(yintercept = marginal_mean), color = "blue", linetype = "dashed", size = .25)+
+  facet_wrap(.~subject)
+
+```
+
+
+### Adding Fixed Effects
+
+As we noted above, gender and attitude (formal/informal setting) seem to play a factor in pitch. 
+
+<center>
+
+```{r echo=F, fig.height=3, fig.width=4}
+dat%>%
+  group_by(gender, attitude)%>%
+  summarise(frequency = mean(frequency, na.rm = T))%>%
+  ungroup()%>%
+  mutate(attitude = factor(attitude, levels = c("inf","pol")))%>%
+  rename(Gender = gender)%>%
+  ggplot(aes(x = attitude, y = frequency))+
+  geom_line(aes(group = Gender, color = Gender))+
+  geom_point(aes(color = Gender))+
+  theme_bw()+
+  labs(y = "Average Frequency\n (Across Scenarios and Subjects)", x = "Attitude")
+
+
+```
+
+</center>
+
+So fitting an intercept-only model likely does not account for all of the variability in the data. In particular, it assumes gender and attitude have no effect on pitch. If we would like to estimate these quantities, such as how the switch from formal to informal changes pitch, we are going to want to incorporate __fixed effects__ into our model. 
+
+__Note:__ We don't really care about subject-specific effects. We only want to account for variation between subjects. __What we really care about is the effect of attitude on pitch after accounting for differences in gender and subject-specific variability__. 
+
+Consider a new model:
+
+$$\text{pitch}_{ij} = \beta_0 + \beta_1*\text{gender}_{i} + \beta_2*\text{attitude}_{ij} + a_i + \epsilon_{ij}$$
+
+where $a_i$ is a random intercept for subject $i$.
+
+```{r}
+
+mixed.fit = lmer(frequency ~ gender + attitude + (1|subject), data = dat)
+
+summary(mixed.fit)
+
+```
+
+This model tells us that the average pitch for females responding to informal questions is around 256 Hz, while males answering the same questions have an average frequency that is 108 Hz lower. The effect of moving from informal to formal causes pitch to drop another 19 Hz on average (for both males and females since we did not include an interaction term.) 
+
+The model output also tells us that the between-subject standard deviation is about 24.5 Hz, while the within-subject variation (variation not explained by differences in subject but across responses) is about 29 Hz.
+
+
+Note that these numbers are slightly different from the numbers reported in the online tutorial. This is because we've used one category as a baseline model while in the online model they used the average as the baseline. To reproduce the results from the tutorial use the following code:
+
+
+```{r}
+d = dat%>%
+  mutate(gender = ifelse(gender=="F",1,-1),
+         attitude = ifelse(attitude=="inf",1,-1))
+mixed.fit.mn = lmer(frequency ~ gender + attitude + (1|subject), data = d)
+summary(mixed.fit.mn)
+```
+
+### Adding an Interaction
+
+We may have wanted to include an interaction between gender and attitude since it appears to have a stronger effect on female responses.
+
+
+```{r}
+
+mixed.fit2 = lmer(frequency ~ gender + attitude + gender:attitude + (1|subject), data = dat)
+summary(mixed.fit2)
+```
+
+### Comparing Models
+To compare our various models we can look at their AICs. Recall that $AIC=−2(\text{log  likelihood})+ 2k$ where $k$ is the number of parameters in your model.
+
+```{r}
+# I will explain why I refit these with ML (insteal of REML) shortly
+fit.randint.ml = lmer(frequency ~ (1|subject), data = dat,REML = F)
+mixed.fit.ml = lmer(frequency ~ gender + attitude + (1|subject), data = dat,REML = F)
+mixed.fit2.ml = lmer(frequency ~ gender + attitude + gender:attitude + (1|subject), data = dat, REML = F)
+
+paste( "AIC of intercepts-only model :", AIC(fit.randint.ml))
+paste( "AIC of simple mixed effects model :", AIC(mixed.fit.ml))
+paste( "AIC of mixed effects model with interaction:", AIC(mixed.fit2.ml))
+
+```
+We can see adding fixed effects made a significant impact on AIC and adding the interaction term did not help. To check this more formally, we can use a likelihood ratio test using the `anova()` function. Note that we have to refit our models using maximum likelihood instead of REML for these to be valid tests (more on this below). 
+
+```{r message = FALSE}
+# compare random intercept only to model with fixed effects
+anova(fit.randint,mixed.fit, refit = TRUE)
+
+# compare model with interaction term to model without
+anova(mixed.fit2,mixed.fit, refit = TRUE)
+```
+
+Here we see that dropping the fixed effects would significantly decrease the performance of our model, but the interaction term between gender and attitude does not. We will drop the interaction term moving forward.
+
+# REML
+Notice that I included a term `refit = TRUE` in my `anova()` test. To see why I did this, let's take a deeper look into REML, the algorithm used to fit these models.
+
+REML stands for restricted maximum likelihood or residual maximum likelihood. We know ordinary ML yields a biased estimate for the variance components. REML solves this problem. Consider a mixed effects model
+
+$$y_{ij} = x_{ij}\beta + z_{ij}a_i + \epsilon_{ij}   $$
+where $x_{ij}$ and $z_{ij}$ are known covariates for individual $ij$, $\beta$ represents the fixed effects, $a_i$ represents the random effects, and $\epsilon_{ij}$ is the individual error. In matrix form, we can write
+
+$$Y = X\beta + Za+ \epsilon. $$
+Consider some $K$ such that $KX = 0$. If we multiply everything by the matrix $K$ we get 
+$$KY = KX\beta + KZa + K\epsilon\\
+= KZa + K\epsilon,$$
+by our choice of $K.$ That is, we have essentially removed the fixed effects from the model. Once these have been removed, we can estimate the variance components of the random effects using maximum likelihood. 
+
+That is, now we have a model with mean 0 (since both the random effects $a_i$ and $\epsilon_{ij}$ are assumed to have mean 0). 
+Our variance terms will become (assume $i\in\{1,2,...,n\}, j \in\{1,2,...,m\}$ with $m\times n = N$)
+$$var(KZa)=KZvar(a)(KZ)^T = KZ(I_{n\times n}\otimes J_{m\times m}*\sigma^2_a)Z^TK^T $$
+$$var(K\epsilon)=Kvar(\epsilon_{ij})K^T = K(I_{N\times N}\sigma^2)K^T $$
+where $J_{m \times m}$ is the $m \times m$ matrix of 1's and $\otimes$ indicates the Kronecker product of two matrices.
+So we get
+
+$$KY \sim N(0, KVK^T), $$
+where $V$ is the block matrix Hongkai described in class 
+$$V = I_{n\times n} \otimes \left[\begin{matrix} \sigma^2 + \sigma_a^2 & \sigma_a^2 &\sigma^2_a& ...&\sigma_a^2 \\
+\sigma_a^2 & \sigma^2+\sigma_a^2 & \sigma_a^2 &...& \sigma_a^2 \\
+\vdots & & \ddots  & & \vdots \\
+\sigma_a^2 & ... & & \sigma_a^2 & \sigma^2+\sigma_a^2 \end{matrix} \right]_{m\times m}$$
+
+So we can write our restricted likelihood for $KY$ as usual and we know how to solve for the MLE of $\sigma^2$ and $\sigma_a^2$ in this setting.Then, once these estimates have been determined, we plug them in and solve for the MLE of our fixed effects.
+
+Note that one such choice of $K$ is $K = I - P_X$ where $P_X$ is the projection matrix for our design matrix $X$. Here
+ $$KY = (I-P_X)Y = Y - \hat{\mu}, $$
+the residuals, hence the alternative name "residual maximum likelihood."
+
+So now suppose we want to compare two nested models. One common approach is to use a likelihood ratio test. However, suppose our nested models differ in fixed effects. For example, above we have on model defined by
+$$y_{ij} = \beta_0 + \beta_1*\text{gender}_{i}+\beta_2*\text{attitude}_{ij}+a_i+\epsilon_{ij} $$
+and a nested model with only intercepts
+$$y_{ij} = \beta_0 +a_i+\epsilon_{ij}. $$
+In the more complex model our design matrix is $$X = \left[ \begin{matrix}1 & \text{gender}_1 & \text{attitude}_{1,1}\\
+1 & \text{gender}_1 & \text{attitude}_{1,2}\\ & \vdots &\\1 & \text{gender}_6 & \text{attitude}_{6,14}\end{matrix}\right] $$
+and in the second model we have design matrix $$\tilde{X} = \left[ \begin{matrix}1\\1\\ \vdots \\ 1 \end{matrix} \right]$$
+
+Thus, the $K$ we use for design matrix $X$ will be different from the $\tilde{K}$ we use for the reduced model. Because of this, the restricted likelihoods for $KY$ and $\tilde{K}Y$ will not be comparable because one is no longer just a special case of the other.
+
+__But we should still use REML when fitting the model because it gives us unbiased variance estimates!__ For example, let's look at the variance estimates for both the mdoel fit with REML and ordinary ML:
+
+```{r}
+
+as.data.frame(VarCorr(mixed.fit.ml,comp=c("Variance","Std.Dev.")))%>%
+  select(-var2)%>%
+  kable(align = "c", col.names = c("Group","Variable","Variance","Std. Dev."),
+        caption = "Variance using ML approach:")%>%
+  kable_styling(bootstrap_options = c("striped"))
+
+
+as.data.frame(VarCorr(mixed.fit,comp=c("Variance","Std.Dev.")))%>%
+  select(-var2)%>%
+  kable(align = "c", col.names = c("Group","Variable","Variance","Std. Dev."),
+        caption = "Variance using REML approach:")%>%
+  kable_styling(bootstrap_options = c("striped"))
+
+```
+
+We can see the ML appraoch gives a biased estimate of the variance and, given this relatively small sample size, the difference is not negligible.
+
+Now, back to the example. 
+
+# Continuting the Example
+### Incorporating a Random Slope
+
+Recall that the drop in pitch from informal to formal was not the same for everyone.
+
+<center>
+
+```{r warning = F, echo=F, fig.height=3, fig.width=4}
+dat%>%
+  group_by(subject, attitude)%>%
+  summarise(frequency = mean(frequency, na.rm = T), gender = first(gender))%>%
+  mutate(attitude = factor(attitude, levels = c("inf","pol")))%>%
+  rename(Gender = gender)%>%
+  ggplot(aes(x = attitude, y = frequency))+
+  geom_line(aes(group = subject, color = subject))+
+  geom_point(aes(color = subject))+
+  theme_bw()+
+  labs(y = "Average Pitch", title = "Pitch Change by Gender", x = "Attitude")+
+  theme(plot.title = element_text(hjust = .5))
+```
+
+
+
+</center>
+
+Because of this, we can consider adding a random slope to the model. The model now becomes
+
+$$\text{pitch}_{ij} = \beta_0 + \beta_1*\text{gender}_{ij} + \beta_2*\text{attitude}_{ij} + a_i + b_i*\text{attitude}_{ij} + \epsilon_{ij} $$
+
+
+where $b_i$ is the random slope for subject $i$ associated with a shift from informal to formal. 
+
+__Note__ that it would not make sense to include a random slope for gender since each subject only has observations for one gender and we have already taken gender and individual variation into account so adding an extra random slope for gender would be redundant. However, since we have observations for informal/formal responses per subject, we can think about how this effect is different for each subject.
+
+
+```{r message=F, warning=F, error=F}
+
+# add random slope
+mixed.fit3 = lmer(frequency ~ gender + attitude +  (1 + attitude|subject), data = dat)
+
+summary(mixed.fit3)
+
+mixed.fit3.ml = lmer(frequency ~ gender + attitude +  (1 + attitude|subject), data = dat, REML = F)
+
+# check AIC compared to previous model
+paste( "AIC of model with random slope :", AIC(mixed.fit3.ml))
+
+paste( "AIC of model without random slope :", AIC(mixed.fit.ml))
+
+
+```
+Here we see that the random slope term actually hurts our AIC compared to the model with a random slope and fixed effects. That is, it seems to be saying that the variability can be explained through the gender and attitude, and we don't have to go to the individual level.
+
+We can also run an ANOVA test to see that the random slopes were not necessary in this case.
+
+```{r warning=FALSE, message=FALSE}
+
+# no interaction
+anova(mixed.fit, mixed.fit3, refit= TRUE)
+
+```
+Note that testing random effects involves testing that the variance for that term is $0$. Since we know variances are always nonnegative, this means we are testing at the boundary of the parameter space, which often causes typical asymptotic results to break down. The resulting p-values are too large, and the conclusion is conservative. A better test is to run a parametric-bootstrap to simulate data under the null model and derive p-values from your bootstrapped estimated. 
+
+We probably won't expect to see a different conclusion, given that our p-value was so large. But to show how this would be done I will run the bootstrap to get a new estimate for the p-value.
+
+```{r, message=FALSE, warning=FALSE}
+simulate = FALSE
+
+if(simulate){
+set.seed(1)
+# list to store chisq values at each iteration
+chi = c()
+
+for(i in 1:1000){
+# simulate data from null model (reduced)
+y = simulate(mixed.fit)%>%unlist()%>%unname()
+
+# original data had one missing value so add that back in so dimensions agree
+y = c(y[1:38],NA,y[39:83])
+
+# fit null and alterantive model with simulated data
+f.null = lmer(y  ~ gender + attitude + (1 | subject), data=dat)
+f.alt  = lmer(y ~ gender + attitude + (1 + attitude | subject), data = dat)
+
+#get chisq statistics for these two models
+stat = anova(f.null, f.alt, refit = TRUE)$Chisq[2]
+
+# add value to list
+chi = c(chi, stat)
+}
+
+# save simulated data (save time for knitting)
+saveRDS(chi, file = "simulated.chisq.rds")
+}
+
+# read in simulated data 
+chi = readRDS("simulated.chisq.rds")
+
+# observed value
+obs = anova(mixed.fit, mixed.fit3, refit= TRUE)$Chisq[2]
+
+# new p-value is proportion of simulated values are more extreme than our observed value
+sum(chi>obs)/1000
+
+
+```
+
+So we stick with the model without the random slope
+
+$$\text{pitch}_{ij} = \beta_0 + \beta_1*\text{gender}_{ij} + \beta_2*\text{attitude}_{ij} + a_i + \epsilon_{ij}$$
+
+Let's look at a plot of our model fit so far.
+
+```{r warning=F}
+
+est = data.frame(intercept = unlist(coef(mixed.fit)$subject[1]), subject = row.names(coef(mixed.fit)$subject[1]), row.names = NULL)%>%
+  mutate(gend_slp = ifelse(substr(subject,1,1)=="M",-116.1952,0))
+
+
+dat%>%
+  full_join(est, by = "subject")%>%
+  mutate(att_slp = ifelse(attitude=="pol",-27.4,0),
+         interaction = ifelse(attitude=="pol"&gender=="M",16.19028,0))%>%
+  mutate(pred = intercept + gend_slp + att_slp + interaction)%>%
+  mutate(attitude = factor(attitude, levels = c("inf","pol")))%>%
+  select(-c(6:9))%>%
+  ggplot()+
+  geom_point(aes(x = attitude, y = frequency, color = subject), size = .5)+
+  geom_line(aes(x = attitude, y = pred, color = subject, group = subject))+
+  theme_bw()+
+  facet_wrap(.~subject)
+
+
+
+```
+
+We can also take a look at the predicted random effects:
+
+```{r}
+ranef(mixed.fit)
+
+
+dotplot(ranef(mixed.fit,condVar=TRUE))
+```
+
+Note that now not all females have positive random intercepts and not all males have negative random intercepts because we have included gender as a fixed effect in the model.
+
+### Random Effects by Scenario
+
+We may also think that there could be some clustering at the scenario-level. Let's now consider the 7 different scenarios as our grouping factor, $i = 1,...,7$, with each subject's outcomes for that scenario are taken as independent, given the scenario. 
+
+Let's plot this:
+
+```{r warning=F}
+dat%>%
+  mutate(scenario = as.factor(scenario))%>%
+  ggplot(aes(x = scenario, y = frequency, color = scenario ))+
+  geom_boxplot()+
+  theme_bw()
+
+dat%>%
+  mutate(scenario = as.factor(scenario))%>%
+  ggplot(aes(x = attitude, y = frequency, color = scenario ))+
+  geom_boxplot()+
+  theme_bw()+
+  facet_wrap(.~scenario, ncol = 7)+
+  labs(title = "Scenarios by Attitude")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+
+Here we see that there is a lot of variability within scenarios (given that we are grouping subjects together) and not quite as much between scenarios. However, there may still be some interesting trend so we will try fitting some models using scenario as a clustering group. 
+
+
+```{r}
+
+dat%>%
+  mutate(scenario = as.factor(scenario))%>%
+  group_by(scenario, attitude)%>%
+  summarise(frequency = mean(frequency, na.rm = T))%>%
+  mutate(attitude = factor(attitude, levels = c("inf","pol")))%>%
+  ggplot(aes(x = attitude, y = frequency))+
+  geom_line(aes(group = scenario, color = scenario))+
+  theme_bw()+
+  labs(y = "Average Pitch", title = "Pitch Change by Scenario", x = "Attitude")+
+  theme(plot.title = element_text(hjust = .5))
+
+```
+
+Let's try adding a random intercept for scenario to our working model.
+```{r}
+# random intercept for scenario
+mixed.fit5 = lmer(frequency ~ attitude + gender  + (1|subject) + (1|scenario), data=dat)
+
+
+summary(mixed.fit5)
+
+```
+
+This seems to have helped our model fit. If we run an ANOVA test we see that our fit is significantly improved by adding a random intercept for each scenario. Note again that this will be a conservative estimate of the true p-value because of the boundary issue discussed earlier. We can run the bootstrap here too but we only expect to get a more significant result so in this case I'm going to skip the bootstrap estimation, since my goal is model selection at this point.
+
+```{r message=FALSE, warning=FALSE}
+
+
+anova(mixed.fit5, mixed.fit, refit = TRUE)
+
+```
+
+
+We can also try adding a random slope for scenario.
+```{r}
+# random slope for scenario
+mixed.fit5b = lmer(frequency ~ attitude + gender  +(1|subject) + (1 + attitude|scenario), data=dat)
+
+summary(mixed.fit5b)
+```
+
+As we can see, the REML criterion (similar to deviance) does not appear to have changed much. Let's test this formally using ANOVA.
+
+```{r warning=FALSE, message=FALSE}
+
+# compare models (random intercept vs random intercept and slope for scenario)
+anova(mixed.fit5,mixed.fit5b, refit = TRUE)
+```
+
+
+Again, random slopes are not necessary for this dataset. The p-value is, again, very high, so while this may be a conservative estimate because we are testing the variance parameter at the boundary of the parameter space, we don't expect it to drop from .9 to under .05. So we conclude that dropping the random slopes for scenario will not significantly weaken our model fit.
+
+So we get a final model with fixed effects for intercept, gender, and attitude and random intercepts for subject and scenario. Random slopes were not helpful for either subject or scenario so we leave them out. To show that this wasn't all for nothing and that our mixed effects model does in fact provide a much better fit than a typical linear model without random effects we can compare it to a simple `lm()` fit.
+
+```{r message=F, warning=F} 
+lm.fit = lm(frequency ~ gender + attitude , data = dat)
+
+anova(mixed.fit5, lm.fit, refit = TRUE)
+
+
+```
+
+We see that our model fits much better than a fixed effects-only model (think: why do we not feel the need to refit the p-value with a bootstrap here?).
+
+Let's visualize our final model.
+
+```{r warning=FALSE, message=FALSE}
+est_final = data.frame(intercept = unlist(coef(mixed.fit5)$subject[1]), subject = row.names(coef(mixed.fit5)$subject[1]), row.names = NULL)%>%
+  mutate(gend_slp = ifelse(substr(subject,1,1)=="M",-116.1952,0))
+
+dat%>%
+  full_join(est_final, by = "subject")%>%
+  mutate(att_slp = ifelse(attitude=="pol",-27.4,0),
+         interaction = ifelse(attitude=="pol"&gender=="M",16.19028,0))%>%
+  mutate(pred = intercept + gend_slp + att_slp + interaction)%>%
+  mutate(attitude = factor(attitude, levels = c("inf","pol")))%>%
+  select(-c(6:9))%>%
+  ggplot()+
+  geom_point(aes(x = attitude, y = frequency, color = subject), size = .5)+
+  geom_line(aes(x = attitude, y = pred, color = subject, group = subject))+
+  theme_bw()+
+  facet_wrap(.~subject)
+
+dotplot(ranef(mixed.fit5,condVar=TRUE))
+
+```
+
+__Reminder:__ random effects are assumed to have mean zero but for any given group the effect will likely be some non-zero value. We assume our random effects come from two sources (scenario and subject) each with normal distributions. Assuming these effects are independent, the variability of our random effects should be $$\sigma^2_{\text{random effects}} = \sigma^2_{\text{subject}}+ \sigma^2_{\text{scenario}}.$$
+
+Let's look at a plot of our random effects compared to such a normal curve. We can see that they all fall within a one standard deviation of the mean (zero).
+```{r warning=FALSE, message=FALSE}
+# final model is model 5
+sd = 14.81 + 24.81
+norm_df = data.frame(random_intercept = rnorm(mean = 0, sd = sd, n = 1000))
+
+data.frame(ranef(mixed.fit5)$subject)%>%
+  mutate(subject = c(paste("F",seq(1,3),sep = ""),paste("M",c(3,4,7),sep="")))%>%
+  rename(random_intercept = X.Intercept.)%>%
+  mutate(d = dnorm(random_intercept, mean = 0, sd = sd))%>%
+  ggplot(aes(x = random_intercept, y = d, color = subject))+
+  geom_point(aes(color = subject))+
+  geom_vline(xintercept = c(sd,-sd), color = "black",linetype = "dashed")+
+  theme_bw()+
+  ylim(0,.011)+
+  xlim(-100,100)+
+  stat_function(fun = function(x) dnorm(x, mean = 0 , sd = sd), colour = "black")
+  
+
+```
+
+# Resources
+
+Here are some other resources I found that explain fitting and interpreting these kinds of mixed effects models:
+
+* https://arxiv.org/ftp/arxiv/papers/1308/1308.5499.pdf (random effects starting page 22)
+
+* https://ourcodingclub.github.io/tutorials/mixed-models/
+
+* http://users.stat.umn.edu/~gary/classes/5303/handouts/REML.pdf

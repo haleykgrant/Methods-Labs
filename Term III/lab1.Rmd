@@ -1,0 +1,420 @@
+---
+title: "Lab 1 (1/28/20)"
+author: "Haley Grant"
+date: "1/21/2020"
+output:
+  html_document:
+    highlight: tango
+    number_sections: no
+    code_folding: hide
+    theme: cosmo
+    toc: TRUE
+    toc_float: TRUE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The purpose of this lab is to:
+
+* Go over strategies for beginning a data analysis (namely how EDA can inform modeling)
+* Fitting and interpreting GLMs 
+* Introduce some useful R packages that may be helpful for this course
+* Discuss collinearity
+
+
+```{r message=FALSE}
+# install pacman
+if(!require(pacman)){ install.packages("pacman")}
+
+# load necessary packages
+library(pacman)
+p_load(tidyverse,ggplot2,Sleuth3,janitor,kableExtra,skimr,car,locfit)
+
+```
+
+
+## The Data
+
+Data come from the `Sleuth3` package and document the age, gender, and survival status of the "Donner Party."
+
+__Details:__
+
+In 1846 the Donner and Reed families left Springfield, Illinois, for California by covered wagon.
+In July, the Donner Party, as it became known, reached Fort Bridger, Wyoming. There its leaders
+decided to attempt a new and untested route to the Sacramento Valley. Having reached its full size of
+87 people and 20 wagons, the party was delayed by a difficult crossing of the Wasatch Range and
+again in the crossing of the desert west of the Great Salt Lake. The group became stranded in the
+eastern Sierra Nevada mountains when the region was hit by heavy snows in late October. By the
+time the last survivor was rescued on April 21, 1847, 40 of the 87 members had died from famine
+and exposure to extreme cold.
+
+```{r}
+# loading the data
+df = case2001%>%
+  clean_names()%>%
+  mutate(status_bin = ifelse(status == "Survived", 1 , 0))
+
+```
+
+
+
+First we take a look at the data with two functions: summary() and skim from the `skimr` package. The summary() function gives summary statistics about the columns of the data: either counts of levels for categorical variables, and quantiles/mean/range for numeric. The skim() function gives a more thorough look at the data, including details about missingness and variable type. This dataset is very clean, but for messier data this function can be really helpful for understanding your data structure.
+
+```{r}
+# skim high level overview of data
+summary(df)
+
+# skim is from skimr package
+skim(df)
+```
+
+<br /> 
+
+
+## Exploratory Plots
+
+We next look at the data in a number of plots. First, we plot the outcomes as a function of age, colored by sex. Here a 1 indicates survival and a 0 indicates that the person died. We can see that younger individuals seem to be more likely to survive than older individuals.
+
+```{r}
+df%>%
+  ggplot(aes(x = age, y = status_bin))+
+  geom_jitter( aes(color = sex), height = 0.05, width = NULL)+
+  theme_bw()+
+  labs(x = "Age", y = "Survival Status", title = "Survival Status by Age")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+
+We can also plot the age distribution of the group that survived and the group that did not. Two ways of making these plots are density plots and boxplots, both of which are shown below.
+
+```{r}
+
+df%>%
+ ggplot(aes(x = age))+
+  geom_density(aes(color = status) )+
+  theme_bw()+
+  geom_vline(data = df%>% filter(status == "Died"), 
+             aes(xintercept=mean(age), color = status), 
+             linetype="dashed", size=1)+
+  geom_vline(data = df%>% filter(status == "Survived"), 
+             aes(xintercept=mean(age), color = status), 
+             linetype="dashed", size=1)+
+  labs(x = "Age", title = "Age Distribution by Survival Status")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+df%>%
+  ggplot(aes(x = status, y = age))+
+  geom_boxplot()+
+   labs(y = "Age", x= "Survival Status", title = "Age Distribution by Survival Status")+
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+We can further subset the data into sexes to see how the survival of an individual may be influenced by sex.
+
+```{r}
+
+df%>%
+  group_by(sex)%>%
+  summarise(died = length(which(status == "Died")),
+            survived = length(which(status == "Survived")))%>%
+  gather(key = "status", value = "count", c(died,survived))%>%
+  ggplot(aes(x = sex, y = count, fill= status))+
+  geom_bar(stat = "identity", position = "dodge")+
+  theme_bw()+
+  labs(title = "Breakdown by Sex", x = "Sex", y = "Count")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+df%>%
+ ggplot(aes(x = age))+
+  geom_density(aes(color = status) )+
+  theme_bw()+
+  labs(title = "Breakdown by Sex", x = "Sex", y = "Count")+
+  facet_wrap(.~sex)+
+  theme(plot.title = element_text(hjust = 0.5))
+
+df%>%
+  ggplot(aes(x = status, y = age))+
+  geom_boxplot()+
+  labs(title = "Age Distributions by Survival and Sex", x = "Sex", y = "Age")+
+  facet_wrap(.~sex)+
+  theme_bw()+
+ theme(plot.title = element_text(hjust = 0.5))
+
+
+
+```
+
+From these plots we can see that while younger individuals were more likely to survive than older individuals, this age trend was more pronounced among women. Now that we have an idea of what might be some key features in the data, we turn to modeling these trends using generalized linear models.
+
+<br /> 
+
+
+__Some notes on plots:__
+
+* Add titles to make it clear the relationship you're trying to show.
+* Change axis labels to clear descriptions (i.e. don't keep dataframe$variable as axis labels).
+* Use jitter/colors/legends to make plots clear.
+
+
+<br /> 
+
+## Fitting a model
+
+We are going to fit a binomial GLM including both age and gender as predictors of survival. We first fit a complex model with age, gender, squared terms, and interaction terms. We will use backward selection, deleting unnecessary terms, until we reach our final model. 
+
+Reminder: for binary outcomes $y_i$ with $P(y_i = 1) = \pi_i$, logistic regression fits the model:
+
+$$logit(\pi_i) = log\bigg(\frac{\pi_i}{1-\pi_i}\bigg)=log\bigg(\frac{P(y_i = 1)}{P(y_i = 0)}\bigg) = \sum_j \beta_j x_{ij} $$
+
+Here our $x$'s will be age, gender, and functions of them (interaction terms, squared terms, etc.) and $y_i$ will be survival status. This models the log odds of survival.
+
+```{r}
+# first model with age, age sqared, and interaction terms
+fit = glm(status_bin ~ age + I(age^2) + sex + age:sex + I(age^2):sex,
+family = binomial, data = df)
+summary(fit)
+
+# drop age squared:gender interaction
+fit2 = update(fit, ~ . - I(age^2):sex)
+summary(fit2)
+
+# check how much model fit has been reduced
+1 - pchisq(fit2$deviance-fit$deviance , df = 1)
+```
+
+
+#### Interpretation:
+
+p value of 0.49 implies the reduced model is not significantly worse than the more complicated model. Thus, we decide to drop the interaction term between age$^2$ and sex. We next try dropping the age$^2$ term.
+
+
+```{r}
+# drop square term
+fit3 = update(fit2, ~ . - I(age^2))
+summary(fit3)
+
+1 - pchisq(fit3$deviance-fit2$deviance , df = 1)
+```
+
+
+#### Interpretation:
+
+p value of 0.22 implies the further reduced model is not significantly worse than more complicated model. Finally, we try dropping the interaction term between age and sex.
+
+```{r}
+# drop age:sex interaction
+fit4 = update(fit3, ~ . - age:sex)
+summary(fit4)
+
+1 - pchisq(fit4$deviance-fit3$deviance , df = 1)
+
+```
+
+#### Interpretation:
+
+p value of 0.048 gives evidence that the reduced model is not adequate compared to model 3. That is, this implies that the interaction term is informative and should be kept in the model.
+
+```{r}
+# check model 3 against overfit model
+p = 1 - pchisq(fit3$deviance, fit3$df.residual)
+paste("p value of", p , "gives no strong evidence against our model compared to the overfit model.")
+
+
+# compare to intercept-only (modeling mean) model
+p = 1 - pchisq(fit3$null.deviance, fit3$df.null)
+paste("p value of", p , "gives strong evidence that our model is better than the intercept-only model.")
+
+```
+
+
+<br /> 
+
+## Model Output
+
+Now that we have decided on our 3rd model with age, sex, and an age:sex interaction term, we can turn to interpreting the results.
+
+```{r}
+
+
+
+# broom package gives nice output table
+broom::tidy(fit3)%>%
+  kable(align = "c", col.names = c("Covariate", "Estimated Coefficient", "Standard Error", "t", "p value"))%>%
+  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
+
+```
+
+
+The final model is
+$$logit(\pi_i)\approx 7.25 - 0.19*age-6.93*I_{male}+0.16*age*I_{male} $$
+
+That is, for females we have $$\frac{\pi_i}{1-\pi_i}\approx e^{7.25-0.19*age} $$
+and for males we have $$ \frac{\pi_i}{1-\pi_i}\approx e^{(7.25-6.93)+(0.16-0.19)*age} = e^{0.32 -0.03*age} $$
+
+We can compare male to female survival at any given age. Consider the odds of survival at the mean age of 31.8.
+```{r message=F}
+# store estimated coefficients
+beta = fit3$coef
+
+# female vs male at average age
+exp(beta[3]+ 31.8*(beta[4]))
+
+# you can also get this with the predict() function
+exp(predict(fit3, data.frame(age = 31.8, sex = "Male")))/exp(predict(fit3, data.frame(age = 31.8, sex = "Female")))
+
+```
+
+#### Interpretation: 
+
+At mean age, the odds of a man surviving are estimated to be 0.17 times the odds of a woman surviving, or women are about 6 times more likely to survive at the mean age in the dataset.
+
+```{r}
+# age trend for females
+exp(beta[2])
+# age trend for males
+exp(beta[2]+beta[4])
+
+```
+
+#### Interpretation:
+
+For women, the odds of survival with each additional year of age are 0.82*odds of survival for a woman a year younger. For men, that factor is only 0.93. That is, age plays a larger role in the survival of women than it does for men. Hence if we check the odds ratio again at different ages, say 20 and 50 we are likely to see different results.
+
+```{r}
+# odds ratio male/female at age 20
+exp(beta[3]+ 20*(beta[4]))
+
+# odds ratio male/female at age 50
+exp(beta[3]+ 50*(beta[4]))
+
+
+
+```
+Here we see that while women are much more likely than men to survive at age 20 (odds of survival are about 40 times higher), by age 50 that trend reverses itself and men are more likely to survive (odds of survival are about 3 times higher for men). Keep in mind that these are odds ratios and in both cases the odds of survival at 50 are less than 1 (.086 for females and 0.27 for males) whereas at age 20 the odds of females surviving are at almost 29 while for males the odds are about 0.72 (see code below).
+
+```{r}
+# women age 20
+exp(beta%*%c(1,20,0,0))%>%as.numeric()
+
+# men age 20
+exp(beta%*%c(1,20,1,20))%>%as.numeric()
+
+# women age 50
+exp(beta%*%c(1,50,0,0))%>%as.numeric()
+
+# men age 50
+exp(beta%*%c(1,50,1,50))%>%as.numeric()
+
+
+```
+
+We next look at out model fit the original data plot and compare to smoothed loess curve. 
+
+\*__Note:__ the expit() funciton comes from the `locfit` package.
+
+```{r}
+
+df%>%
+  mutate(status = ifelse(status=="Died",0,1))%>%
+  ggplot(aes(x = age, y = status))+
+  geom_jitter( aes(color = sex), height = 0.05, width = NULL)+
+  theme_bw()+
+  labs(x = "Age", y = "Survival Status", title = "Survival Status by Age")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  stat_function(data =df%>%
+  mutate(status = ifelse(status=="Died",0,1))%>%
+    filter(sex == "Male"),
+  fun = function(age) expit(beta[1] + beta[2]*age +beta[3]+beta[4]*age), aes( color=sex))+
+  stat_function(data =df%>%
+  mutate(status = ifelse(status=="Died",0,1))%>%
+    filter(sex == "Female"),
+  fun = function(age) expit(beta[1] + beta[2]*age), aes( color=sex))
+
+df%>%
+  mutate(status = ifelse(status=="Died",0,1))%>%
+  ggplot(aes(x = age, y = status))+
+  geom_jitter( aes(color = sex), height = 0.05, width = NULL)+
+  theme_bw()+
+  labs(x = "Age", y = "Survival Status", title = "Survival Status by Age")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  geom_smooth(method = "loess", formula = y~x, aes(fill = sex, color= sex),alpha=0.2, size=1, span = 1)
+
+
+
+
+```
+
+
+<br /> 
+
+## Collinearity 
+
+We don't have to worry about collinearity with this simple dataset, but in more complicated data, collinearity can be a problem and result in misleading model output. Below is a toy example to demonstrate what can happen if a model is fit with predictors that are highly correlated. We create a new fake column by simply adding some random noise to the age column in our data and fit a new model that also includes the new column as a predictor.
+
+```{r}
+set.seed(1234)
+# add fake variable that is highly correlated with age
+x = rnorm(n = nrow(df), mean = 2, sd = 3 )
+df$x = x+df$age
+
+# check how correlated new variable is with age (almost 1)
+cor(df$x, df$age)
+
+# try fitting new model
+fit.collinear = update(fit3, ~ . + x-age:sex)
+summary(fit.collinear)
+
+
+```
+
+We can see that with the new predictor introduced, the model output is very different and we no longer see significant results for age as a predictor of survival. Note that neither x nor age have significant coefficients under this model, so we haven't simply opted to use x in the place of age. So what's going on? 
+
+The answer rests in the *variance inflation factor (VIF)* that arises when predictors are close to linearly dependent. We use the `car` package to calculate the VIF, though to calculate it manually we would simply need to regress one variable, $x_j$ on the other predictors and compute $\frac{1}{1-R_{j}^2}$, where $R_j^2$ is the multiple R squared obtained from regressing $x_j$ on the other predictors. 
+
+```{r}
+# variance inflation factor (1/(1-R^2))
+# ignore terms in interaction
+
+vif(fit.collinear)
+
+
+```
+
+
+Variance inflation factor of 15 implies standard error for age coefficient is almost 4 times what we would expect with uncorrelated predictors. This means that by including x in our model, we are essentially making it much more difficult to find a significant trend in age, because we inflate the variance by a factor of 15--i.e. much wider confidence intervals.
+
+
+Techniques to handle mutlicollinearity:
+
+* Check correlation matrix (or scatter plots) of predictors and remove highly correlated variables
+* Ridge regression ([link](https://ncss-wpengine.netdna-ssl.com/wp-content/themes/ncss/pdf/Procedures/NCSS/Ridge_Regression.pdf]))
+* Center variables (reduces collinearity of interaction terms)
+* PCA (for many predictors)
+
+Toy example of how mean-centering reduces collinearity. Consider a covariate $a$ and a higher order term to be used in a regression model, for example the second degree term $a^2$.
+```{r}
+# consider 20 observations from a binom(10,0.5) distribution
+a = rbinom(20,10, prob = .5)
+
+# check correlation between a and its square 
+cor(a,a^2)
+# VIF
+1/(1-summary(lm(a^2~a))$r.squared)
+
+# center a
+a_center = scale(a, scale = F, center = T)
+
+# check correlation between centered version and its square
+cor(a_center,a_center^2)
+# VIF
+1/(1-summary(lm(a_center^2~a_center))$r.squared)
+
+
+```
+
+Here we can see that while $a$ is highly correlated with $a^2$, $a_{center}$ is not highly correlated with $a_{center}^2$. If we include $a$ and its square in the model the variance inflation factor for $a^2$ is over 50 but with the centered version it is just barely above 1 (VIF if bounded below by 1 but not bounded above).

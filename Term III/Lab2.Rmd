@@ -1,0 +1,535 @@
+---
+title: "Lab 2"
+author: "Haley Grant"
+date: "2/1/2020"
+output:
+  html_document:
+    highlight: tango
+    number_sections: no
+    theme: cosmo
+    toc: TRUE
+    toc_float: TRUE
+    
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In today's lab we will go over fitting and interpreting a Poisson GLM, with special focus on how to check and account for overdispersion. We will also go over an example showing how the Newton-Raphson algorithm works.
+
+
+```{r warning=FALSE, message=FALSE}
+
+# install pacman
+if(!require(pacman)){ install.packages("pacman")}
+
+# load necessary packages
+library(pacman)
+p_load(tidyverse, 
+       ggplot2,
+       janitor, #clean_names() function
+       kableExtra, #printing nice tables
+       skimr, #data summary
+       gganimate, #turn ggplots into animations
+       data.table, #read in table from URL
+       AER, #overdispersion tests
+       DHARMa) #overdispersion tests
+
+
+
+
+```
+
+
+# Coding Example (Poisson GLMs/Overdispersion)
+
+## The Data
+
+These data contain information about horseshoe crab breeding. Female horseshoe crabs migrate to the shore to breed with a male crab attached to her spine, then burrows into the sand where she lays her eggs. Eggs are fertilized externally by the male. Other males may cluster around the pair and may also fertilize eggs. These males are called *satellites*. Our outcome of interest is number of satellites per female crab. We have the following data about the female crab:
+
+* color : 
+    * 1 = medium light
+    * 2 = medium
+    * 3 = medium dark
+    * 4 = dark
+* spine condition :
+    * 1 = both good
+    * 2 = one worn or broken
+    * 3 = both worn or broken
+* Carapace width in cm 
+* Weight in kg 
+
+
+```{r}
+crab_df = fread("http://users.stat.ufl.edu/~aa/glm/data/Crabs.dat")
+
+skim(crab_df)
+
+```
+### Plotting the data
+
+First, we plot a histogram of the outcome variables. 
+
+```{r}
+# histogram of y
+crab_df%>%
+  ggplot(aes(x = y))+
+  geom_histogram(binwidth = 1, color = "black")+
+  labs(x = "# satellites")+
+  theme_bw()
+
+
+```
+
+Suppose we just want to look at the relationship between weight and number of satellites. Below is a plot of that relationship. 
+```{r}
+
+crab_df%>%
+  ggplot(aes(x = weight, y = y))+
+  geom_point(size = 0.5)+
+  theme_bw()
+
+```
+
+Because this is count data with relatively rare events (not many satellites per female), we may be inclined to model this using a Poisson GLM. However, we should check a few assumptions first. Namely, a Poisson model assumes that the variance is equal to the mean at any given level of the covariates. Let's check this.
+
+## Checking for Overdispersion
+
+Below I'm checking the mean and variance within subgroups of our covariate x (weight). Because weight is a continuous variable, I'm going to group them into intervals and calculate the mean and variance within each group to get an idea of if the mean is about equal to the variance at each level of x. Notice that the variance tends to be much larger than the mean (up to 4 times larger in some subgroups).
+
+```{r}
+# round down to nearest x.5 weight and calculate mean and variance of outcome
+crab_df%>%
+  mutate(weight = plyr::round_any(weight, .5, floor))%>%
+  group_by(weight)%>%
+  summarise(n = n(),
+    mean = mean(y),
+            var = var(y),
+            ratio = var/mean)
+```
+
+If we run a simple Poisson GLM we might get a reasonable estimate for the mean, but the variance estimates (and hence, our statistical inference) will be too optimistic, with standard errors underestimated. Below we plot the fitted estimate for the Poisson model. 
+
+```{r}
+fit = glm( data = crab_df, y~ weight, family = "poisson")
+
+int = fit$coefficients[1]%>%unname()
+
+slope = fit$coefficients[2]%>%unname()
+
+
+crab_df%>%
+  ggplot(aes(x = weight, y = y))+
+  geom_point(size = 0.5)+
+  theme_bw()+
+  stat_function(fun = function(weight) exp(int + slope*weight))
+
+```
+
+To show how far from a Poisson distribution we are, let's simulate what are data might have looked like if they came from a Poisson model without overdispersion. Namely, we fit a Poisson regression for the mean with weight as a predictor and get estimated coefficients (for the intercept, $\hat{\beta}_0$ and slope, $\hat{\beta}_1$). Then, for each observation $i$ in our dataset, we randomly sample from a Poisson distribution where the mean is our fitted value given weight $w_i$. That is, we generate for observation $i$ an outcome $y~Pois(\hat{\beta}_0+w_i\hat{\beta}_1)$.
+
+We then plot the data and compare it to our actual data. This will give us a sense of what we would expect if our data were truly Poisson distributed with no overdispersion as a means of comparison. 
+
+### Simulated Poisson vs Real Data
+
+```{r}
+set.seed(123)
+sim = data.frame(weight = crab_df$weight)
+sim$lambda = exp(int+slope*sim$weight)
+sim$y = rep(NA, nrow(sim))
+for(i in 1:nrow(sim)){
+  sim$y[i] = rpois(n = 1, lambda = sim$lambda[i])
+}
+
+sim%>%
+  dplyr::select(-lambda)%>%
+  mutate(data_source = rep("Simulated", nrow(sim)))%>%
+  bind_rows(crab_df%>%
+              dplyr::select(weight,y)%>%
+              mutate(data_source = rep("Real data", nrow(crab_df)) ))%>%
+  ggplot(aes(x = weight, y = y))+
+  geom_point(size = 0.5)+
+  theme_bw()+
+  stat_function(fun = function(weight) exp(int + slope*weight))+
+  facet_wrap(.~data_source)
+
+
+ sim%>%
+  mutate(weight = plyr::round_any(weight, .5, floor))%>%
+  group_by(weight)%>%
+  summarise(n = n(),
+    mean = mean(y),
+            var = var(y),
+            ratio = var/mean)
+
+
+```
+
+Note that our data are much more dispersed than the simulated data.
+
+
+### Other packages to check for overdispersion
+
+More formally, we can use packages such as the `AER` or `DHARMa` packages to check for overdispersion. These tests can be quite helpful when you are fitting a more complicated model with a larger set of predictors, in which case you wouldn't want to have to check for overdispersion at all levels of all combinations of your covariates (plus higher order terms, interaction terms, etc. would make it even more complicated).
+
+```{r}
+# using AER functions
+dispersiontest(fit)
+
+
+# using DHARMa functions
+res = simulateResiduals(fit, refit=T) 
+testDispersion(res)
+plot(res)
+```
+
+To see what these plots should look like if there is no dispersion, consider our simulated dataset.
+
+```{r}
+fit_sim = glm(y~weight, data = sim, family = "poisson")
+
+# using AER functions
+dispersiontest(fit_sim)
+
+
+# using DHARMa functions
+res_sim = simulateResiduals(fit_sim, refit=T) 
+testDispersion(res_sim)
+plot(res_sim)
+```
+
+Clearly there is overdispersion... __So what do we do?__
+
+## Accounting for Overdispersion
+
+One option is to fit a *quasipoisson* model, which allows for overdispersion. We can also account for overdispersion manually by adjusting standard errors by $\sqrt{\hat{\phi}}$, where $\hat{\phi}$ is our estimated dispersion parameter. We could also fit a negative binomial model instead, which has an additional parameter to handle variability independent of the mean (unlike Poisson). The function for fitting a negative binomial model in R is `glm.nb()` from the `MASS` package.
+
+```{r}
+fit_weight = glm( data = crab_df, y~ weight, family = "poisson")
+
+summary(fit_weight)
+# estimate dispersion parameter with deviance/(n-p)
+disp = fit_weight$deviance/(173 - 2)
+disp
+```
+
+If we fit the simple Poisson model, our estimated dispersion using the formula $$\phi \approx \frac{D}{n-p}, $$
+where D is the (residual) deviance, n is the number of observations, and p is the number of parameters in our model, we get $\hat{\phi} \approx 3.28$. We can manually adjust our standard errors by multiplying them by the square root of our estimated dispersion parameter.
+```{r}
+# manually adjust standard errors 
+0.17893*sqrt(disp)
+0.06502*sqrt(disp)
+```
+We can also adjust for overdispersion by fitting a quasipoisson model, which allows the variance to be a function of a parameter independent of the mean. That is, it models the variance as a function of the mean times some other unknown parameter $Var(Y)= v(\mu)*\phi$.
+```{r}
+
+# adjust standard errors using quasipoisson method
+fit_weight_q = glm( data = crab_df, y~ weight, family = "quasipoisson")
+summary(fit_weight_q)
+```
+
+We can see that the two methods give us very similar estimates for our standard errors, and hence confidence intervals. 
+```{r}
+
+# adusting for overdispersion using dispersion estimate
+paste("(",round(exp(0.5893-1.96*sqrt(disp)*0.06502), digits = 2),", ",round(exp(0.5893+1.96*sqrt(disp)*0.06502), digits = 2), ")", sep = "")
+
+# adusting for overdispersion using quasipoisson
+paste("(",round(exp(0.5893-1.96*.1151), digits = 2),", ",round(exp(0.5893+1.96*.1151), digits = 2), ")", sep = "")
+
+
+```
+
+## Fitting a Model
+
+Obviously we would like to incorporate more predictors in the model, so now we fit a model with all covariates included.
+
+```{r}
+
+fit = glm(y ~ weight + factor(color) + width + factor(spine) , data = crab_df, family = "quasipoisson")
+
+summary(fit)
+```
+
+### Checking Collinearity
+```{r}
+
+# width vs weight
+crab_df%>%
+  ggplot(aes(x = weight, y = width))+
+  geom_point()+
+  theme_bw()
+
+# highly correlated
+cor(crab_df$weight, crab_df$width)
+
+# weight vs spine
+crab_df%>%
+  ggplot(aes(x = weight, y = spine))+
+  geom_point(position = "jitter")+
+  theme_bw()
+# spine vs color
+crab_df%>%
+  ggplot(aes(x = color, y = spine))+
+  geom_point(position = "jitter")+
+  theme_bw()
+
+```
+Based on these plots, we probably want to drop width from our model, since it is highly correlated with weight.
+
+```{r}
+fit2 = update(fit, . ~ . -width)
+
+summary(fit2)
+
+fit3 = update(fit2, . ~ . -factor(spine))
+
+
+broom::tidy(fit3)%>%
+  kable(align = "c")%>%
+  kable_styling(full_width = FALSE, bootstrap_options = "striped")
+```
+
+```{r}
+
+round(exp(0.5461798), digits = 2)
+
+paste("(",round(exp(0.5461798-0.1215331*1.96), digits = 2),", ",round(exp(0.5461798+0.1215331*1.96), digits = 2),")", sep = "" )
+
+
+```
+
+
+Interpretation: For every one kg increase in weight, the number of male satellites is expected to increase by a factor of 1.73 (C.I. 1.36-2.19). 
+
+
+__Final thoughts:__ If you want to fit a Poisson model, always check overdispersion before making inference from your model. **If there is evidence of overdispersion in the model, make sure to take that into account when reporting standard errors, confidence intervals, etc.** You can also choose to fit another model (quasi-likelihood models, negative binomial, etc.) that allows for variance to be modeled separately from the mean.
+
+# Newton-Raphson/Fisher Scoring Demonstration
+
+Below I give a visual example of how the Newton Raphson algorithm works. First, I write a function to perform the algorithm (you did this on homework 1) and show that it gives the correct output by comparing to a GLM fit. I will be demonstrating the 1 dimensional case for purposes of visualization. The data come from HW1, I will be ignoring the intercept in this case so we only estimate one beta value.
+
+## The data
+```{r}
+# the data (only choosing one covariate so I can show the method in 1D)
+df = read.delim("Ex0107.txt")  
+design = df%>%
+  dplyr::select(3)%>%
+  data.frame()
+response = df$y_response
+```
+
+## The log likelihood
+
+The point of Newton Raphson/Fisher Scoring is to derive the MLE in cases when we cannot get a closed form solution by just maximizing the likelihood function. Below I plot the likelihood of beta. 
+
+Recall that for binary data with $P(y_i = 1)= \pi_i$, the likelihood is
+
+$$\prod_{i=1}^n = \pi_i^{y_i}(1-\pi_i)^{1-y_i} $$
+and hence the log likelihood can be written as
+$$\sum_{i=1}^n y_i log(\pi_i)+(1-y_i)log(1-\pi_i) =  \sum_{i=1}^n y_i log(\frac{\pi_i}{1-\pi_i})+log(1-\pi_i)  $$
+
+Recall that $\pi_i$ will be modeled as $\pi_i = expit(\sum_j x_{ij}\beta_j) = \frac{exp(X_i^T\beta)}{1+exp(X_i^T\beta)}$ so this log likelihood is a function of $\beta$, i.e.
+$$L(\beta) = \sum_{i=1}^n = y_i log(\pi_i)+(1-y_i)log(1-\pi_i)  $$ depends on $\beta$ in that $\pi_i$ is a function of $\beta$.
+```{r }
+
+# function for log likelihood
+loglik = function(beta, y = response, X = design){
+  X = as.matrix(unname(design))
+  y = as.vector(unname(response))
+  beta = as.matrix(unname(beta))
+  
+  bx = X%*%beta
+  sum(
+    y*log(1/(1+exp(-bx)))+(1-y)*log(1-(1/(1+exp(-bx))))
+  )
+
+}
+
+
+# estimate log likelihood at different values of beta
+d = data.frame(x = seq(-1,3,by = 0.01))
+
+loglik.vals = c()
+for(i in 1:nrow(d)){
+ l = loglik(y = response, beta = matrix(d$x[i]), X = design)
+ loglik.vals = c(loglik.vals,l)
+}
+d$l = loglik.vals
+  
+# plot log likelihood
+ggplot(data = d, aes(x = x, y = l))+
+  geom_line()+
+  labs(x = "beta", y = "log likelihood")+
+  theme_bw()
+
+
+```
+
+Newton-Raphson/Fisher Scoring exploit the fact that the log likelihood of an exponential family distribution (when the natural parameter is used) is concave. The process is as follows:
+
+* 1. Start with an initial estimate of $\beta$. (Here I have chosen the initial value to be 0).
+* 2. Approximate the log likelihood of beta using the second-order Taylor approximation of the log likelihood at your initial estimate. That is, if $\beta^{(t)}$ is our current estimate of $\beta$, we use the approximation:
+
+$$L(\beta)\approx L(\beta^{(t)})+(\beta-\beta^{(t)})L'(\beta^{(t)})+\frac{1}{2}(\beta-\beta^{(t)})^2L''(\beta^{(t)}) $$
+
+* 3. Maximize this approximation of the log likelihood (which we can do because it is a concave degree 2 polynomial) to obtain a new estimate of $\beta$, called $\beta^{(t+1)}$.
+
+If we take the derivative with respect to $\beta$ and set the equation equal to zero we get  
+
+$$L'(\beta^{(t)}) + (\beta-\beta^{(t)})L''(\beta^{(t)})=0 $$ 
+$$\implies\beta^{(t+1)}= \beta^{(t)}-L'(\beta^{(t)})\big[L''(\beta^{(t)}\big]^{-1} $$
+
+* 4. Repeat this process until you have met some convergence threshold (i.e. $|\beta^{(t)}-\beta^{(t+1)}|<\delta$ for some threshold $\delta$).
+
+**Note:** for the higher dimension case we would replace these terms with their vector form. Here, $(\beta - \beta^{(t)})^2L''(\beta^{(t)})$ becomes $(\beta - \beta^{(t)})^TH(\beta - \beta^{(t)})$ where $H$ is the Hessian matrix (matrix of second-order partial derivatives).
+
+
+Recall:
+$$L'(\beta) = \sum_{i=1}^n \frac{\partial L}{\partial \pi_i}\frac{\partial \pi_i}{\partial \eta_i}\frac{\partial \eta_i}{\partial \beta}   $$
+$$\frac{\partial L}{\partial \pi_i}=  \frac{y_i}{\pi_i}-\frac{1-y_i}{1-\pi_i}=\frac{y_i-\pi_i}{\pi_i(1-\pi_i)}$$
+For $\pi_i = \frac{exp(\eta_i)}{1+exp(\eta_i)}$
+$$\frac{\partial \pi_i}{\partial \eta_i} = \frac{e^{\eta_i}(1+e^{\eta_i})-e^{\eta_i}(e^{\eta_i})}{(1+e^{\eta_i})^2} = \frac{e^{\eta_i}}{(1+e^{\eta_i})^2} = \frac{e^{\eta_i}}{1+e^{\eta_i}}\bigg(1-\frac{e^{\eta_i}}{1+e^{\eta_i}}\bigg) = \pi_i(1-\pi_i)$$ 
+And finally, 
+$$\frac{\partial \eta_i}{\partial \beta}= x_i $$
+So we get $$L'(\beta) = \sum_{i=1}^n \frac{y_i-\pi_i}{\pi_i(1-\pi_i)}\pi_i(1-\pi_i)x_i=\sum_{i=1}^n(y_i-\pi_i)x_i $$
+$$L''(\beta) = -\sum_{i=1}^n \pi_i(1-\pi_i)x_i^2$$
+
+## The algorithm
+
+Using the derivations above, we can implement the algorithm using our data.
+```{r warning=FALSE, message=FALSE}
+###  Newton Raphson function
+NR = function(X,y){
+  X = as.matrix(X)
+  y = as.vector(y)
+  n = nrow(X)
+  
+  output = c()
+  
+  ### set initial beta value
+  beta = matrix(0, nrow = ncol(X), ncol = 1)
+  beta = as.matrix(beta)
+  estimates = c(beta)
+  
+  ### define a difference variable
+  delta = 1
+  
+  while(sum(abs(delta))>0.0000000001){
+    eta = as.vector(X%*%beta)
+    pi= as.vector(exp(eta)/(1+exp(eta)))
+    W = diag(pi*(1-pi))
+    var = solve(t(X)%*%W%*%X)
+    delta = var%*%t(X)%*%(y-pi)
+  
+  ### update beta
+  beta = beta - (-var%*%t(X)%*%(y-pi))
+  estimates = c(estimates,as.vector(beta))
+  }
+  estimates = c(estimates,as.vector(beta))
+  
+  output$mle = beta
+  output$var = as.matrix(var)
+  output$estimate_history = matrix(estimates, ncol = ncol(X), byrow = T)
+   return(output)
+}
+```
+
+
+
+
+```{r warning=F}
+# get Newton-Raphson output from our function
+nr = NR(design,response)
+nr
+
+# check against glm
+fit = glm(y_response~x2_covariate2-1, family = "binomial", data = df)
+logLik(fit)
+
+loglik(beta = nr$mle)
+
+# plot the model fit at each iteration (i.e. each value of beta that we try until convergence)
+df%>%
+  ggplot(aes(x = x2_covariate2, y = y_response))+
+  geom_point()+
+  stat_function(fun = function(x) exp(x*nr$mle)/(1+exp(x*nr$mle)), size = 2)+
+  stat_function(fun = function(x) exp(x*nr$estimate_history[1])/(1+exp(x*nr$estimate_history[1])), color = "red")+
+  stat_function(fun = function(x) exp(x*nr$estimate_history[2])/(1+exp(x*nr$estimate_history[2])), color = "orange")+
+  stat_function(fun = function(x) exp(x*nr$estimate_history[3])/(1+exp(x*nr$estimate_history[3])), color = "green")+
+  stat_function(fun = function(x) exp(x*nr$estimate_history[4])/(1+exp(x*nr$estimate_history[4])), color = "blue")+
+  theme_bw()
+```
+
+
+## Visualizations
+
+```{r}
+
+
+# estimate log likelihood at estimate of beta for each iteration in NR
+approx = data.frame(beta_new = NULL, l = NULL, iteration = NULL, beta_est = NULL)
+for(i in 1:8){
+for(b in seq(-1,3,by = .01)){
+  # initial estimate
+  b_old = nr$estimate_history[i]
+  # log likelihood
+  Lb = loglik(beta = b_old)
+  # pi = expit(eta) = expit(Xbeta)
+  pi = exp(design*b_old)/(1+exp(design*b_old))
+  # first derivative/gradient
+  u = sum((response-pi)*design )
+  # second derivative/hessian
+  H = -sum(pi*(1-pi)*design^2)
+
+  # taylor approximation
+  ll = Lb + u*(b-b_old) + (1/2)*(b-b_old)^2*H
+
+  # update estimates
+approx = rbind(approx, data.frame(beta_new = b,l = as.numeric(ll), iteration = i, beta_est = b_old))
+}
+}
+
+approx = approx%>%
+  mutate(next_est = ifelse(iteration<8, nr$estimate_history[iteration+1],nr$estimate_history[iteration]))
+
+# specify labels
+colors = c("Old Estimate" = "black", "New Estimate"= "red", "Taylor Approximation" = "blue")
+sizes = c("Log likelihood"=.75)
+
+ggplot(approx)+
+  geom_line(data = d, aes(x = x, y = l, size = "Log likelihood"))+
+  geom_line(data = approx, aes(x = beta_new, y = l, color = "Taylor Approximation"), linetype = "dashed")+
+  labs(x = "beta", y = "log likelihood")+
+  ylim(-23,-10)+
+  theme_bw()+
+  facet_wrap(.~iteration, labeller = "label_both")+
+  geom_vline(aes(xintercept = beta_est, color = "Old Estimate"),linetype = "dotted")+
+  geom_vline(aes(xintercept = next_est, color = "New Estimate"),linetype = "dotted")+
+  scale_color_manual(values = colors, name = NULL)+
+  scale_size_manual(values = sizes, name = NULL)+
+  theme(legend.position = c(0.85,.1),legend.background = element_blank(),
+        legend.box.background = element_rect(colour = "black"),legend.spacing.y = unit(-0.17, "cm"), legend.text = element_text(size = 5),legend.key.size = unit(.5, "cm"))
+  
+
+
+p = ggplot(approx)+
+  geom_line(data = d, aes(x = x, y = l, size = "Log likelihood"))+
+  geom_line(data = approx, aes(x = beta_new, y = l, color = "Taylor Approximation"), linetype = "dashed")+
+  transition_states(
+  iteration,
+    transition_length = 1,
+    state_length =2
+  )+
+  labs(x = "beta", y = "log likelihood", title = "Iteration = {closest_state}")+
+  ylim(-23,-10)+
+  theme_bw()+
+  geom_vline(aes(xintercept = beta_est, color = "Old Estimate"),linetype = "dotted")+
+  geom_vline(aes(xintercept = next_est, color = "New Estimate"),linetype = "dotted")+
+  scale_color_manual(values = colors, name = NULL)+
+  scale_size_manual(values = sizes, name = NULL)
+
+animate(p)
+
+```

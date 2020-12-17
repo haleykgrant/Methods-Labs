@@ -1,0 +1,445 @@
+---
+title: "TermIV.Review"
+author: "Haley Grant"
+date: "5/2/2020"
+output:
+  html_document:
+    highlight: tango
+    number_sections: no
+    theme: cosmo
+    toc: TRUE
+    toc_float: TRUE
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+In today's lab I'm going to review the main topics covered in this term. 
+
+# Main Topics
+
+Last term we talked about generalizing linear models to study outcome variable that do not satisfy the normality assumptions of typical linear regression. This term, we further extended linear models to scenarios in which the independence assumption of OLS is violated.
+
+## Things to know how to do
+
+This is not necessarily a comprehensive list, but I think it touches on the major topics covered in class.
+
+* Understanding random and fixed effects
+    * What are we trying to model with random effects? Fixed effect?
+    * What are the parameters we care about?
+    * Why do we need to account for correlation?
+* Algorithms to estimate parameters in mixed effects models
+    * REML (Restricted/Residual Maximum Likelihood)
+    * EM Algorithm
+    * MCMC
+        * Metropolis-Hastings, Metropolis, Gibbs
+* Prediction
+    * Best Predictor (BP)
+    * Best Linear Predictor (BLP)
+    * Best Linear Unbiased Predictor (BLUP)
+    * Best Linear Unbiased Estimator (BLUE)
+* Marginal Models
+    * GEE (general idea)
+    * Model Misspecification 
+
+
+# Correlated data and mixed effects
+
+In the first three terms we learned about linear models (LM) and their extension, generalized linear models (GLM). In all of the models we fit, we assumed independence of observation. What happens when we assume our data are independent when they aren't?
+
+Suppose we have the following one-way layout:
+
+$$y_{ij}=\mu_i+\epsilon_{ij} $$
+where $i$ indicates the group (school, individual, class, etc.) that observation $y_{ij}$ comes from, and $j$ indicates the $j^{th}$ individual in that group. Here $\mu_i$ is the group mean for group $i$ and $\epsilon_{ij}$ is the deviation of observation $y_{ij}$ from that group mean. Assume $e_{ij}\sim N(0,\sigma^2)$ and $\mu_i \sim N(\mu,\sigma^2_a)$. That is, the group means come from a normal distribution centered about an overall mean $\mu$. We could alternatively write our model as
+
+$$y_{ij} = \mu + a_i +\epsilon_{ij} $$
+where now $a_i\sim N(0,\sigma^2_a)$. Note that this model assumes __conditional independence__ among members of the same group, but not independence over all observations.
+
+If we take the variance within groups, we see that we get the variance we typically expect from OLS,
+
+$$var(y_{ij} |\mu_i )= var(\mu+a_i+\epsilon_{ij}|\mu_i) \\=var(\epsilon_{ij})\\= \sigma^2 $$
+However, marginally we get $$var(y_{ij}) = E(var(y_{ij}|\mu_i))+var(E(y_{ij}|\mu_i)) \\ = E(\sigma^2)+ var(\mu + a_i ) \\= \sigma^2 + \sigma_a^2.$$
+
+
+So, as we discussed in third term, the clustering within our data leads to overdispersion. This will result in invalid standard errors. As a remedy for this, linear mixed models allow us to account for such __correlations__ in our data by incorporating random effects. There are two main types of random effects:
+
+* __Random intercepts:__ which allow individuals/clusters to vary at baseline.
+* __Random slopes:__ which allow the effect of certain covariates to affect individuals differently.
+
+
+We can generalize the form of our linear mixed models to include random and fixed effects
+
+$$Y = X\beta + Zu+e$$
+Here $\beta$ is our vector of fixed effects (intercept, slopes for any covariates), and $X$ is the set of covariates corresponding to those fixed effect parameters. $u$ here represents random effects and $Z$ represents the covariates associated with those random effects (could be intercept/group-specific indicators, continuous covariates, etc.). 
+
+
+# Estimation
+
+In the one-way model above the parameters we would like to estimate are $\mu$, $\sigma^2$ and $\sigma_a^2$. Since we do not observe the $\mu_i$'s directly, this is a slightly more difficult problem than typical OLS regression, because we have two sources of randomness (within group and between group) that we have to account for. 
+
+Some ways we discussed solving for these parameters were...
+
+* REML 
+
+* EM algorithm
+
+* MCMC sampling
+
+## REML
+
+Recall that REML is an approach to estimate the variance components of a model. If we have a model with both fixed and random effects
+
+$$y = X\beta + Zu + e $$
+
+(in the model above, $\beta = (\mu,...,\mu)^T$, $u = (a_1,...,a_n)^T$ and $X = Z = (1,...,1)^T$). 
+
+Then we can solve for the parameters associated with $u$ (i.e. the variance components because they are assumed to have mean $0$) by first eliminating the fixed effects. We do this by finding a matrix $K$ in the null space of $X$, any multiplying the whole system by this $K$ such that 
+
+$$Ky = KX\beta+KZu+Ke \\=KZu+Ke,$$
+since $KX = 0$ by our specification of $K$. This will give us a restricted likelihood for $KY$, which should still follow a normal distribution, since we know a linear combination of normals is still normal. We estimate the variance parameters, then plug these estimates back into the original likelihood, where we then solve for the fixed effects.
+
+__Note 1:__ One simple choice for $K$ is $(I-P_X)$ where $P_X = X(X^TX)^{-1}X^T$, the projection matrix onto the space spanned by $X$. When we multiply the system by $(I-P_X)$, we get $$(I-P_X)y = (I-P_X)Zu+(I-P_X)e $$
+Note that the left hand side of this equation is $$(I-P_X)y = y - X(X^TX)^{-1}X^Ty \\ = y - X\hat{\beta}$$
+where $\hat\beta$ is the typical OLS estimates. Hence we are modeling residuals. This makes sense, since we know residuals have mean $0$ and hence we must have gotten rid of fixed effects and are only modeling variance.
+
+__Note 2:__ As we discussed in lab 1, we need to be careful when using REML to fit and compare models. If we change the fixed effects in a model, say we remove one from a model to get a simpler nested model, the nullspace of $X$ will change and hence the restricted likelihood that we maximize to get our variance estimates will also change. So one restricted likelihood is not a special case of the other and we cannot just apply our usual tests for comparing nested models. To compare these nested models we have to refit the models with MLE to guarantee that satisfy the conditions of our typical tests (likelihood ratio techniques).
+
+## EM algorithm
+
+We then turned to the EM algorithm as a way to get a __point estimate for the MLE__. The setup of the EM algorithm is as follows:
+
+We have some __observed data $X$__ and parameters of interest $\theta$. We also have some __missing data $Y$__ (think, group membership in mixture models, group means in hierarchical models, etc) that we do not observe, but would make our estimation much easier if we did. __We want to maximize__ $\pmb{f(X|\theta)}$ but this can be hard. So instead we maximize a function involving missing data that also corresponds to increasing the observed data likelihood.
+
+More formally, 
+
+* Denote the observed data likelihood as $f(X|\theta)$ 
+
+* Denote the full data likelihood if $f(X,Y|\theta)$ 
+
+At each iteration $t$ we start with our most recent estimate of our parameters $\theta^{(t)}$.
+
+__E Step:__
+
+During the E step we define our Q function as
+
+$$Q(\theta|\theta^{(t)}) = E_{Y | X, \theta^{(t)}} \log f(X,Y|\theta)  $$
+
+We take the expectation of our missing data holding the parameters fixed at our most recent estimate to get the best predictor of our missing data. That is, we only take the expectation over terms involving missing data in this step, and everything else is treated as a constant.
+
+The intuition behind this is even though we cannot observe the missing data $Y$ directly, given our observed data $X$ and current parameter estimates we can get a best guess for those missing variables ($E_{Y|X,\theta^{(y)}}h(Y)$ for functions of $Y$ in our likelihood).
+
+__M Step:__  
+
+Once we've gotten our best predictions of the terms involving missing data in the Q function, we plug them in and then maximize the Q function over our parameters.
+ $$\theta^{(t+1)} = argmax_{\theta} Q (\theta | \theta^{(t)})$$
+
+That is, during this step (the M step), we no longer have missing data in our Q function, just predictions of those missing data given observed data and the current parameter estimates, which are now considered constants with respect to the parameters of interest. We maximize over $\theta$ to get better estimates of our parameters.
+
+__Repeat until convergence:__ We get new parameter estimates $\theta^{(t+1)}$ at each iteration and return to the E step to get more refined predictions of our missing data given our new estimates of our parameters, and continue until we meet some convergence criteria.
+
+### Caveats 
+__Remember that the EM algorithm is vulnerable to getting stuck at lcoal, as opposed to global, maxima or saddle points.__ Because of this, it is common to start your algorithm at multiple starting points (multiple initial values of $\theta^{(0)})$. If these multiple starting points converge to different estimates, we plug those estimates into the observed data likelihood and choose the one that gives the highest value.
+
+Also recall that sometimes our system has multiple types of dependent missing data (think $a_i$ and $\mu_i$ from problem 2 on homework 2). When given problems like this, it can be helpful to use the tower property of expectation (iterated expectation) to first take the expectation of one set of missing values, conditional on the other, and then take the marginal expectation of the remaining missing data once the other set has been integrated out.
+
+### Why does maximizing Q correspond to increasing the observed data likelihood?
+
+Recall that $$f(X,Y|\theta) = f(Y|X,\theta)f(X|\theta)\\ 
+\implies \log f(X,Y|\theta) =\log f(Y |X, \theta)+ \log f(X|\theta) \\
+\implies \log f(X|\theta) = \log f(X,Y|\theta) -\log f(Y|X,\theta) \\
+\implies E_{Y|X,\theta^{(t)}} \log f(X|\theta) = E_{Y|X,\theta^{(t)}} \log f(X,Y|\theta) -E_{Y|X,\theta^{(t)}}\log f(Y|X,\theta) $$
+Note that the left hand side does not involve $Y$, so 
+
+$$\int \log f(X|\theta^{(t)}) f(Y|\theta^{(t)})DY = \log f(X|\theta^{(t)})\int f(Y|\theta^{(t)})DY \\=\log f(X|\theta^{(t)}) $$
+since the marginal pdf of $Y$ integrates to 1.
+
+So we have  $$\log f(X|\theta^{(t)}) = E_{Y|X,\theta^{(t)}} \log f(X,Y|\theta) -E_{Y|X,\theta^{(t)}}\log f(Y|X,\theta^{(t)}) \\=
+ Q(\theta^{(t)} |\theta^{(t)}) - E_{Y|X,\theta^{(t)}}\log f(Y|X,\theta^{(t)})$$
+Now let's consider updating to $\theta^{(t+1)}$. Then if we evaluate the above at $\theta^{(t+1)}$ we get 
+
+$$\log f(X|\theta^{(t+1)}) = 
+Q(\theta^{(t+1)}|\theta^{(t)})  - E_{Y|X,\theta^{(t)}}\log f(Y|X,\theta^{(t+1)})$$
+
+If we compare the observed data likelihood given our old estimate vs our new updated value we note that 
+
+$$Q(\theta^{(t+1)}|\theta^{(t)})\geq Q(\theta^{(t)}|\theta^{(t)})   $$
+since we obtain $\theta^{(t+1)}$ by maximizing Q at iteration $t$. 
+
+We also know, from the information inequality 
+
+$$E_\color{purple}{{Y|X,\theta^{(t)}}}\log f(\color{magenta}{Y|X,\theta^{(t+1)}})\leq E_\color{purple}{{Y|X,\theta^{(t)}}}\log f(\color{purple}{Y|X,\theta^{(t)}}) \\ 
+\implies  -E_{Y|X,\theta^{(t)}}\log f(Y|X,\theta^{(t+1)}) \geq -E_{Y|X,\theta^{(t)}}\log f(Y|X,\theta^{(t)})$$
+
+So we get that $f(X|\theta^{(t+1)}) \geq f(X|\theta^{(t)}).$
+
+## MCMC
+
+MCMC is another approach used to make inference on parameters of interest. In this case, rather than just getting a point estimate for the MLE (as EM does), MCMC uses the concept of __sampling__ to study the entire target distribution (often a posterior distribution of a parameter given some observed data) and then empirically estimate summary statistics of said distribution.
+
+The idea of MCMC is to create a Markov chain that satisfies the following properties:
+
+* __Stationary distribution equal to target distribution__.
+
+* __Irreducible__: we want to ensure that our target distribution allows us to sample from the entire support of of our target distribution regardless of where we start the chain. 
+
+    * An example of a proposal distribution that would violate this could be if our target distribution $p(x)$ is defined on the integers and we chose a proposal distribution $$q(x^{(t)},x^*)= \begin{cases} x^{(t)}+2 & \text{w.p. }\frac{1}{2}\\ x^{(t)}-2 & \text{w.p. }\frac{1}{2}\end{cases}$$
+Then if we start the chain at an even number we can never reach an odd number, and vice versa.
+
+* __Aperiodic__: which means we don't want there to be values that can only occur every $k^{th}$ iteration (for $k>1$) of the chain. We want to avoid periodicity because if the period of some point is $k$ then the relative frequency of the point in our sample would be bounded above by $1/k$. 
+
+* __Recurrent__, meaning that every point has a positive probability of returning to itself later in the chain. We want this since if $x^{(t)}=x$ for some iteration $t$ it means $p(x)>0$, since otherwise we would not have accepted it. But if $x$ is not recurrent, as the chain continues the relative frequency of $x$ will go to zero even though $p(x)>0.$ 
+
+The goal run this Markov chain until it has converged to its stationary distribution, our stationary distribution. Once it has converged, we throw out the pre-convergence samples (burn-in period) and run the chain for another N steps. This sample, since it has been drawn from our target distribution, can be used to empirically estimate summary statistics (mean, median, variance, standard error, confidence intervals) of our distribution. 
+
+Some examples of MCMC algorithms introduced in class are:
+
+* M-H algorithm
+
+* Metropolis algorithm
+
+* Gibbs sampling algorithm
+
+### M-H algorithm
+
+Suppose our target distribution is $p()$. We start by choosing a starting point $x_0$ and a jumping rule $q(y|x)$. At each iteration $t$ we
+
+* Draw a proposal point $x^{\text{*}}\sim q(x^{\text{*}}|x^{(t)})$.
+
+* We next calculate the acceptance probability $$\alpha(x^{\text{*}},x^{(t)})=\min\bigg\{\frac{p(x^{\text{*}})q(x^{(t)}|x^{\text{*}})}{p(x^{(t)})q(x^{\text{*}}|x^{(t)}) },1 \bigg\} $$
+
+* We accept our point $x^{\text{*}}$ with probability $\alpha(x^{\text{*}},x^{(t)})$ and otherwise keep our current value $x^{(t+1)}=x^{(t)}$.
+
+* Return to first step (draw new proposal)
+
+__Intuition:__ Note that our goal is to create a sample that follows (roughly) our target distribution. That means the frequency of any point in our sample should be approximately equal to that point's probability in the distribution $p()$, i.e. for a chain of length $n$
+
+$$\frac{\#\big\{s \in \{1,2,...,N\}: x^{s} = a\big\} }{N}\approx p(a)$$
+        
+or for two points $a$ and $b$
+
+$$\frac{\#\big\{s \in \{1,2,...,N\}: x^{s} = a\big\}/N }{\#\big\{s \in \{1,2,...,N\}: x^{s} = b\big\}/N}\approx \frac{p(a)}{p(b)}$$
+
+Hence,
+
+* If $\alpha(x^{\text{*}},x^{(t)})=1$, then we know $\frac{p(x^{\text{*}})q(x^{(t)}|x^{\text{*}})}{p(x^{(t)})q(x^{\text{*}}|x^{(t)}) }\geq1$. That is, the new value was as or more likely to have generated the data compared to our current estimate (weighted by  a correction factor to account for possible asymmetry of our chosen jumping rule $q()$). So, since $x^{(t)}$ is already in our set (i.e. has already been accepted), then $x^{\text{*}}$ should also be accepted. 
+
+* If $\alpha(x^{\text{*}},x^{(t)})<1$ then $\alpha(x^{\text{*}},x^{(t)})$ represents the desired relative frequency of $x^{\text{*}}$ compared to $x^{(t)}$. So every time we see the value at $x^{(t)}$, we only want to accept $x^{\text{*}}$ a fraction of the time (fraction is given by $\alpha()$).
+
+### Metropolis algorithm
+
+The metropolis algorithm is just a special case of M-H, with an added condition that the proposal distribution, $q(y|x)$ is symmetric. That is,$q(y|x)=q(x|y)$ and hence the $q()$ terms in $\alpha()$ above cancels. 
+
+
+### Gibbs sampling
+
+This is another special case of Metropolis Hastings, where the proposal distribution for each variable is the full conditional probability given the other variables at their most recent value. Gibbs sampling has a nice property that the acceptance probability is always 1. So we simply draw a proposal value and then move to the next step, without considering accepting/rejecting it. So if we are studying two parameters $\alpha$ and $\beta$ given some observed data $y$, then at each iteration $t$ we first propose an update for $\alpha$ from the conditional distribution $$\alpha^{(t)}\sim p(\alpha^{(t)}|\beta^{(t-1)},y)$$ then we draw $$\beta^{(t)} \sim p(\beta^{(t)}|\alpha^{(t)},y).$$
+
+__Note:__ For Gibbs sampling we need to be able to draw from the full conditionals for all parameters. If we have conjugate distributions for our parameters then this can be nice because the posterior distribution will follow a known distribution with an algebraic form. If your distributions are not conjugate, Gibbs sampling is not useful.
+
+__Remark for the exam:__ Hongkai mentioned that it might be helpful to know a few typical posterior updates for conjugate priors do you don't have to spend time deriving posterior updates. In general a good strategy if you can't immediately see what the posterior updates should be is two write out the full likelihood including all priors. Then for each update step, you consider only one parameter at a time (the others are held fixed), so we can look for just the components involving the other parameters and find the form of the posterior up to a constant.
+
+
+
+# Prediction
+
+Once we fit our models and estimate our parameters of interest, we often want to predict values of our random effects. We are going to assume the following setup
+
+$$\begin{pmatrix}u\\y\end{pmatrix}\sim p(\begin{pmatrix}\mu_u\\\mu_y\end{pmatrix},\begin{pmatrix}D & C\\C' & V\end{pmatrix}) $$
+That is, the joint distribution of our random effects $u$ and observed data $y$ follows some distribution (not necessarily normal) with first two moments given above.
+
+## Best Predictor (BP)
+
+You showed on a homework assignment that the best predictor of a random effect $u$ in terms of mean squared error (MSE) is $$ E(u|y).$$
+As a reminder, this is because if we want to find the value of $\tilde{u}$ that minimum of $$E[(u-\tilde{u})'(u-\tilde{u})] $$
+
+we can note this is equal to
+
+$$E\big[(u-E[u|y]+E[u|y]-\tilde{u})'(u-E[u|y]+E[u|y]-\tilde{u})\big] \\= E\big[(u-E[u|y])'(u-E[u|y]) \big]+2E\big[(u-E[u|y])'(E[u|y]-\tilde{u})\big]+E\big[(E[u|y]-\tilde{u})'(E[u|y]-\tilde{u})\big]$$
+Note that the only thing we have control over is the choice of $\tilde{u}$ so consider the two terms  in which it's involved.
+
+$$ 2E\big[(u-E[u|y])'(E[u|y]-\tilde{u})\big] = 2E_{y}\big[E_{u|y}[(u-E[u|y])'(E[u|y]-\tilde{u})]\big] \\= 2E_y\big[(E[u|y]-E[u|y])' (E[u|y]-\tilde{u})\big]\\=2E_{y}\big[0\times(E[u|y]-\tilde{u})\big]\\=0$$
+So the cross term is zero and we can minimize the last term (which is bounded below by 0) by setting $\tilde{u} = E[u|y]$
+
+
+We can also calculate things like the mean of this predictor, the variance of its, error, etc.
+
+### Mean
+Let $\tilde{u}=E[u|y] = BP(u)$
+
+$$E[\tilde{u}]=E[E[u|y]] = E[u].$$
+This shows our best predictor is unbiased for $u$ (in the sense that its expectation is the expectation of the true $u$) when we sample over $y$
+
+
+### Variance properties
+These further show the link between $u$ and $\tilde{u}$
+
+(i) $$var(\tilde{u}-u) = E(var(\tilde{u}-u|y))+var(E(\tilde{u}-u|y))\\= E\big[var(u|y)\big]$$
+
+That is, the variance of the error is the expected variance of $u$ given our data.
+
+(ii) $$cov(\tilde{u},u')=cov(E[\tilde{u}|y],E[u'|y])+E\big[cov(\tilde{u},u'|y)\big]\\=cov(\tilde{u},\tilde{u}')+0\\=var(\tilde{u}) $$
+
+We know the covariance of a variable with itself is just the variance. Here we show that the covariance of $\tilde{u}$ with $u$ is just the variance of $\tilde{u}$.
+
+(iii) $$cov(u,y)=cov(E[u|y],E[y'|y])+E\big[cov(u,y'|y)\big]\\=
+cov(\tilde{u},y')$$
+
+Likewise, the covariance between $\tilde{u}$ and $y$ is the same as the covariance between the true $u$ and $y$ 
+
+(iv) $$var(u)=E\big[var(u|y)\big]+var(E[u|y])\\= var(\tilde{u}-u)+var(\tilde{u})$$
+
+Lastly, the variance of $u$ can be split into two components: one for the error between $\tilde{u}$ and $u$, and the other for the variance of $\tilde{u}$.
+
+We can use these to consider the correlation between $\tilde{u}$ and $u$ (allow them to be scalars)
+
+$$\rho(\tilde{u},u)=\frac{cov(\tilde{u},u)}{\sqrt{var(\tilde{u})}\sqrt{var(u)}} \\=\frac{var(\tilde{u})}{\sqrt{var(\tilde{u})}\sqrt{var(u)}} $$
+from above
+$$=\frac{\sqrt{var(\tilde{u})}}{\sqrt{var(u)}}=\frac{\sigma_{\tilde{u}}}{\sigma_u} $$
+
+
+## Best Linear Predictor (BLP)
+
+Note that the best predictor of $u$, $E[u|y]$ requires knowing something about the distribution of $u|y$ (namely, the first moment) and is not necessarily linear in $y$. If we want to constrain our predictors to just those that are linear in $y$,
+i.e. predictors of the form $$\tilde{u} = a+By$$
+we again look to minimize the MSE which gives us $$BLP(u) = \tilde{u} = \mu_u +  CV^{-1}(u-\mu_y)$$
+
+Note that  $C= cov(\mu,y')$ and $V=var(y)$. Note that here we do not need to know the full distribution of $u|y$, just $\mu_u$,$\mu_y$,$C$, and $V$.
+
+## Best Linear Unbiased Predictor (BLUP)
+
+The BLUP is the counterpart to BLUE (from linear models) in LMM and GLMM. 
+
+### BLUE
+
+Recall for BLUE we want to find an estimator that is linear in $y$, i.e one that is of the form $$\lambda'y,$$ that is both unbiased for $t'X\beta$ and minimizes the variance $var(\lambda'y)$. The result is that $$BLUE(X\beta) = X\beta^0 = X(X'V^{-1}X)^{-1}X'V^{-1}y $$
+This derivation requires using Lagrange multipliers to solve for $\lambda$ under the above linear constraints, which I won't go into right now but you can read up on in [this book](https://onlinelibrary-wiley-com.proxy1.library.jhu.edu/doi/10.1002/0471722073.ch8) if you'd like to see more.
+
+### BLUP
+
+Similarly to BLUE, for a mixed effects model we would like to find an estimator of the form $$\lambda'y $$ that is unbiased for $t'X\beta+s'u $ that also minimized the variance of the prediction error $var(\lambda'y -(t'X\beta+s'u) )$. The result is 
+$$BLUP(t'X\beta+s'u)= t'X\beta^0 + s'C'V^{-1}(y-X\beta^0) $$
+
+where here $C=cov(u,y')$, $V = var(y)$, and $X\beta^0=BLUE(X\beta)=X(X'V^{-1}X)^{-1}X'V^{-1}y $. Note that here we just need $C$ and $V$ to get a value for the $BLUP(u)$.
+
+
+__Note:__ I don't think the derivations of these are very important, other than maybe the derivation of $BP(u)$. I think the main goal is for you to be able to find the form of these different predictors given different model specification. So if given a problem about any of these, a good strategy is to write out the first and second moments of your random effects and observed data (tower property for expectation/variance and/or Bayes rule will often be helpful here) and then plug in the relevant quantities into the forms above.
+
+# GLMM
+
+We can extend GLMs to incorporate random effects just as we did when we extended LMs to LMMs. 
+Suppose we have outcomes $y$ that, given our random effects, $u$, follow some distribution
+
+$$y|u\sim F(\cdot) $$
+and $$g(E[y|u]) = g(\mu)=X\beta+Zu $$
+
+The marginal properties of a model like this are:
+
+* Mean: Let $\mu_i=E(y_i|u)$
+$$E(y_i)=E[E(y_i|u)] \\=E[\mu_i]\\= E[g^{-1}(X_i'\beta+Z_i'u)]$$
+
+
+* Variance: Suppose $var(y_i|u)=\tau^2\nu(\mu_i)$ 
+$$var(y_i)=E[var(y_i|u)]+var(E[y_i|u]) \\= E[\tau^2\nu(\mu_i)]+var(\mu_i)\\=
+\tau^2E[\nu(g^{-1}(X_i'\beta+Z_i'u))]+var(g^{-1}(X_i'\beta+Z_i'u))$$
+
+*Covariance: Assuming conditional independence $y_i \perp \!\!\! \perp y_j|u $ ,
+
+$$cov(y_i,y_i)=Cov(E[y_i|u],E[y_j|u])+E[cov(y_i,y_j|u)] \\=cov(\mu_i,\mu_j)+0 $$ by conditional independence $$=cov(g^{-1}(X_i'\beta+Z_i'u),g^{-1}(X_j'\beta+Z_j'u)) $$
+__Note:__ The link function in GLMMs often makes the EM algorithm very difficult, so we typically use MCMC for these models.
+
+
+# Marginal Models
+
+Supposed we have a model 
+
+$$y = X\beta+e $$
+where $e\sim (\pmb 0,V)$ follows some distribution with mean 0 and some covariance matrix. If the elements of $y$ are correlated, $V$ will have non-zero entries in its off-diagonal elements.
+
+The OLS estimate if we misspecify the model and assume independence of observations is
+
+$$\hat{\beta} =(X'X)^{-1}X'y$$
+This is an unbiased estimate of $\beta$ since 
+$$E[\hat{\beta}]=E[(X'X)^{-1}X'y]\\=(X'X)^{-1}X'E(y)\\=(X'X)^{-1}X'E(X\beta+e)\\=
+(X'X)^{-1}X'\big[X\beta+E(e)\big]\\=
+(X'X)^{-1}X'X\beta \\=\beta$$
+
+
+However the variance is $$var(\hat{\beta})= (X'X)^{-1}X'var(y)X(X'X)^{-1}$$
+
+If the model weren't misspecified (i.e. independence holds) then we've seen before that this becomes $$(X'X)^{-1}X'\sigma^2IX(X'X)^{-1}\\=(X'X)^{-1}\sigma^2 .$$
+However, if we do not have independence we get that this is
+
+$$ (X'X)^{-1}X'VX(X'X)^{-1}$$
+
+Note that the weighted least squares estimate is
+
+$$\hat{\beta_V}= (X'V^{-1}X)^{-1}X'V^{-1}y $$ and has expectation 
+$$E[\hat{\beta_V}]= (X'V^{-1}X)^{-1}X'V^{-1}X\beta \\=\beta  $$
+so it is also unbiased but in this case the variance is
+
+$$var(\hat{\beta_V})= (X'V^{-1}X)^{-1}X'V^{-1}VV^{-1}X(X'V^{-1}X)^{-1}\\= (X'V^{-1}X)^{-1}\leq var(\hat{\beta})$$
+
+## GEE
+
+Generalized Estimating Equations is a marginal model approach. The idea here is that for discrete data, there aren't many options for families of multivariate distributions that allow for simple correlation structures (as the multivariate normal would allow). GEE extends quasilikelihood methods to allow for correlation within our data. 
+
+Recall that in quasilikelihood approaches, we model the mean, $\mu_{ij}=E(y_{ij})$ and specify a variance function $\nu(\mu_{ij})$. This applies to the marginal model of $y$ but we don't have to specify a full distribution. The basic premise is that we choose some working correlation structure for the data, and use this to get estimates of our parameters $\beta$ (fixed in this case because we are considering the marginal model) and their model-based standard errors. 
+
+The nice thing about GEE is that if the chosen link function and linear predictor are correctly specify (truly describe $E(y_{ij}))$, then the __GEE estimates of $\beta$ will be consistent even if we've misspecified the correlation structure__. The same isn't true for their model-based standard errors, but we account for that by using the __sandwich estimator__ for the covariance matrix, which is more robust.
+
+The general set up of GEE is:
+
+Suppose we have data $y_i = (y_{i1},...,y_{im})$ with means $\mu_i = (\mu_{i1},...,\mu_{im})$
+and link function $g(\mu_{ij})=x_{ij}\beta$. If we let $V_i$ denote the working covariance matrix, depending on some parameters $\alpha$ that determine the working correlation matrix $R(\alpha)$. Note if this is correctly specified, $V_i=var(y_i)$. We let $D_i = \frac{\delta\mu_i}{\delta\beta}$ ($m\times p$ dimensional). In univariate quasi-likelihood, our estimating equations had the form
+
+$$\sum_{i=1}^n(\frac{\delta\mu_i}{\delta\beta})^T\nu(\mu_i)^{-1}(y_i-\mu_i)=\pmb 0. $$
+To extend this to a  multivariate  response, our generalized estimating equations  are
+
+  $$\sum_{i=1}^nD_i^TV_i^{-1}(y_i-\mu_i)=\pmb 0.$$
+
+where $y_i$ and $\mu_i$ are now vectors of correlated responses.
+
+
+Choices of $R_i(\alpha)$:
+
+* Independence structure 
+
+$$R_i = \begin{pmatrix} 1 & 0 & ...& 0\\ 0 & 1 & ...&0\\\vdots & & \ddots & \\0 & ... & 0 &  1 \end{pmatrix} $$
+
+* Exchangeable: $R_{jj'}=\rho$
+    
+$$R_i = \begin{pmatrix} 1 & \rho & ...& \rho\\ \rho & 1 & ...&\rho\\\vdots & & \ddots & \\\rho & ... & \rho &  1 \end{pmatrix}  $$
+
+* AR(1) $R_{j,j'} = \rho^{|j-j'|}$
+
+$$R_i = \begin{pmatrix} 1 & \rho &  \rho^2 & ...\\ \rho & 1 & \rho & ...\\\vdots & & \ddots &  \rho\\... & \rho^2& \rho &  1 \end{pmatrix}  $$ 
+
+* Stationary m-dependent
+    
+  $$R_{jj'}=\begin{cases}\rho_{|j-j'|} & \text{if } |j-j'|\leq m \\ 
+  0 & \text{if } |j-j'|> m \end{cases} $$
+
+
+* Unstructured (off-diagonals can be anything)
+
+$$R_i = \begin{pmatrix} 1 &  & &  \\ & 1 & & \\ & &\ddots  &  \\ & &  &  1 \end{pmatrix}  $$
+
+GEE estimates are obtained by iterating between estimating $\beta$ given current values of $\alpha$ and any dispersion factor $\phi$, and moment estimation of $\alpha$ and $\phi$.
+More specifically, we estimate $\beta$ with a modified Fisher scoring algorithm for the generalized estimating equations. We estimate $\phi$ by equating a Pearson statistic to the nominal $df$ value (as we did in term 3). We estimate $\alpha$ by combining information from the pairwise empirical correlations
+
+To make inference about $\beta$ we need to estimate $var(\hat{\beta})$. A naive approach would be to use $$var(\hat{\beta})=\bigg[\sum_{i=1}^m D_i\hat{V_i}^{-1}D_i\bigg]^{-1}. $$
+
+A better approach is to use the sandwich estimator $$var(\hat{\beta}) = B^{-1}MB^{-1} $$
+where $$B = \sum_{i=1}^mD_i\hat{V_i}^{-1}D_i \\ M = \sum_{i=1}^mD_i\hat{V_i}^{-1}(y_i-\hat{\mu_i})(y_i-\hat{\mu_i})'\hat{V_i}^{-1}D_i. $$
+
+This estimator is more robust to model misspecification (misspecifying our correlation structure).
+
+__Advatanges of GEE:__ GEE provides a computationally simple method to getting parameter estimates compared to ML because it doesn't specify a full distribution for the outcomes. GEE is consistent even under misspecification of the correlation structure.
+
+__Disadvatanges of GEE:__ Because GEE doesn't specify a full distribution for the outcomes, it doesn't have a likelihood function. So typical likelihood-based methods for testing fit, comparing models, and conducting inference can't be applied here.
+
+
+

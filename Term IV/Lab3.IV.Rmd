@@ -1,0 +1,636 @@
+---
+title: "Lab 3 : MCMC"
+author: "Haley Grant"
+date: "4/26/2020"
+output:
+  html_document:
+    highlight: tango
+    number_sections: no
+    theme: cosmo
+    toc: TRUE
+    toc_float: TRUE
+    code_folding: hide
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load packages, warning = F, message = F}
+# load packages
+
+library(pacman)
+p_load(ggplot2,
+       gganimate,
+       tidyverse,
+       knitr,
+       kableExtra,
+       wesanderson,
+       readr,
+       janitor,
+       mvtnorm, # multivarriate normal distribution
+       coda, #mcmc plotting
+       shiny) # make and embed shiny app
+
+
+```
+
+In this lab we're going to go over the intuition behind MCMC and discuss when and how to use MCMC methods to solve problems.
+
+# What is MCMC and why is it useful?
+
+Last lab we went over the EM algorithm, which gives us a nice way to derive the MLE for a distribution. But what if we want more than just a point estimate and, rather, would like to study an entire distribution? MCMC lets us do this. Markov Chain Monte Carlo algorithms are a class of algorithms used to sample from distributions. In statistics we often want to sample from distributions to answer questions that would otherwise be difficult to answer numerically and to study entire distributions.
+
+What kinds of scenarios does MCMC help with?
+
+The most frequent use of MCMC is in multivariate settings when you want to draw from a posterior distribution of a parameter or set of parameters given your data and some other parameters. We could think about a high dimensional case in which we have $k$ parameters and we want to study the posterior distribution of $\theta_i$ (its mean, variance, overall distribution, etc.). We would typically do this using Bayes' rule and integrating out the other effects
+
+$$f(\theta_i | y)= \frac{f(y,\theta_i)}{f(y)} = \frac{\int f(y,\theta_1,...,\theta_k)d\pmb\theta_{[-i]}}{\int f(y,\theta_1,...,\theta_k)d\theta_1,...,d\theta_k} $$
+However these integrals are often difficult to compute because of the high dimension and may not have a closed form solution. In fact, even if we didn't have many dimension but just had a non-conjugate prior for $\theta$:
+$$ f(\theta|y) = \frac{f(y,\theta)}{f(y)}=\frac{f(y|\theta)f(\theta)}{\int f(y|\theta')f(\theta')d\theta'}$$
+the normalizing constant in the denominator might be difficult to calculate.
+
+So rather than try to compute these integrals to evaluate these distributions directly, we choose to __use the concept of sampling__ to draw samples from our target distribution and evaluate its properties empirically. 
+
+To do this, we create a Markov chain with stationary distribution equal to our target distribution. This means that if we run our chain for long enough we will eventually converge to our target distribution. If we run the chain for enough iterations after convergence, the law of large numbers tells us that empirical averages will be consistent estimators for our parameters of interest. Coming up with such a Markov chain could be difficult, which is why we introduce algorithms to generate them such as the __Metropolis Hastings algorithm__ and special cases of it such as the __Metropolis algorithm__ and __Gibbs sampler__.
+
+
+# Metropolis Algorithm Example
+
+Consider the scenario in which we want to make inference about a parameter of interest after observing some data $\pmb y = y_1,...y_n.$ 
+
+## Problem Specification
+The following example comes from Peter D. Hoff's [book](https://link-springer-com.proxy1.library.jhu.edu/book/10.1007/978-0-387-92407-6). Suppose a sample from a population of 52 female song sparrows was studied over the course of a summer and their reproductive activities were recorded. In particular, the age and number of new offspring were recorded for each sparrow.
+
+
+## The Data
+
+
+```{r}
+# read in data
+sparrow = structure(c(3, 1, 1, 2, 0, 0, 6, 3, 4, 2, 1, 6, 2, 3, 3, 4, 7, 
+2, 2, 1, 1, 3, 5, 5, 0, 2, 1, 2, 6, 6, 2, 2, 0, 2, 4, 1, 2, 5, 
+1, 2, 1, 0, 0, 2, 4, 2, 2, 2, 2, 0, 3, 2, 1, 1, 1, 1, 1, 1, 1, 
+1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+1, 1, 1, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 
+2, 5, 5, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 4, 4, 4, 4, 5, 
+5, 5, 5, 3, 3, 3, 3, 3, 3, 3, 6, 1, 1, 9, 9, 1, 1, 1, 1, 1, 1, 
+1, 1, 4, 4, 4, 4, 4, 4, 4, 4, 4, 25, 25, 16, 16, 16, 16, 16, 
+16, 16, 16, 16, 16, 16, 16, 25, 16, 16, 16, 16, 25, 25, 25, 25, 
+9, 9, 9, 9, 9, 9, 9, 36, 1, 1), .Dim = c(52L, 4L), .Dimnames = list(
+    NULL, c("offspring", "intercept", "age", "age2")))%>%
+  data.frame()
+
+saveRDS(sparrow, "sparrow.rds")
+
+```
+
+```{r}
+sparrow%>%
+  ggplot(aes(x = age, y = offspring ))+
+  geom_boxplot(aes(group = age),fill = "#FFDB6D", color = "#C4961A")+
+  theme_bw()
+
+```
+
+It seems like the number of offspring might follow some sort of quadratic pattern with respect to age. We could model this directly using a linear model with quadratic terms, but we also want to restrict our outcomes to non-negative integers. So it seems natural to model the mean of our outcome on the log scale and use Poisson regression.
+
+The book considers a Poisson regression model to describe the data with log-mean
+
+$$\log E(y_i|x_i)  = \beta_1+\beta_2x_i+\beta_3x_i^2$$
+where $x_i$ is the age of sparrow $i$.
+
+To put this into a context similar to the problems we've seen, we could also consider a model with group means
+
+$$\log E(y_i|x_i)  =\sum_j \beta_j I(x = j)$$
+however, I'll just continue with the book's specification for now.
+
+Suppose we also want to assign priors to the coefficients, so we assign a multivariate normal prior with mean 0 and variance 100 to the vector of regression coefficients (let's also assume they are independent, so the covariance matrix is a diagonal matrix). The product of a Poisson and normal distribution does not take the form of a typical distribution, so in this case evaluating the posterior will not be simple. To study the posterior distribution of $\pmb\beta = (\beta_1,\beta_2,\beta_3)$ given the data, we will use MCMC to draw samples from $p(\pmb\beta|\pmb y)$
+
+
+
+## Intuition behind Metropolis algorithm 
+
+The point of the Metropolis algorithm is to end up with a sample of values for our parameter $\pmb\beta^{(1)},\pmb\beta^{(2)},...,\pmb\beta^{(S)}$ such that the relative frequency of each possible $\pmb\beta$ value is roughly equal to $p(\pmb\beta|\pmb y)$. That is for any value $\pmb\beta^*$ of $\pmb\beta$,
+$$ \frac{\#\{\pmb\beta^{(s)} \text{ in the collection } = \pmb\beta^*\} }{S} \approx p(\pmb\beta^*|\pmb y) $$
+Note that  $p(\pmb\beta|\pmb y)$ is hard to calculate because of the integral (marginal distribution of $y$) in the denominator:
+
+$$p(\pmb\beta|\pmb y) = \frac{p(\pmb y | \pmb \beta)p(\pmb\beta)}{p(\pmb y)} \\= \frac{p(\pmb y | \pmb \beta)p(\pmb\beta)}{\int p(\pmb y|\pmb \beta)p(\pmb\beta)d\pmb\beta}$$
+
+Since a normal distribution times a Poisson distribution does not follow any well-known distribution, this normalizing constant in the denominator is hard to calculate.
+
+However, we can simplify this problem by noting that for any two possible values of $\pmb\beta$, $\pmb\beta_a$ and $\pmb\beta_b$ we have
+
+$$\frac{ \#\{\pmb\beta^{(s)} \text{ in the collection } = \pmb\beta_a\}/S} { \#\{\ \pmb\beta^{(s)} \text{ in the collection } = \pmb\beta_b\}/S } \approx \frac{p(\pmb\beta_a|\pmb y)}{p(\pmb\beta_b|\pmb y)}$$
+$$= \frac{p(\pmb y | \pmb \beta_a)p(\pmb\beta_a)}{p(\pmb y)}\frac{p(\pmb y)}{p(\pmb y | \pmb \beta_b)p(\pmb\beta_b)}\\ = \frac{p(\pmb y | \pmb \beta_a)p(\pmb\beta_a)}{p(\pmb y | \pmb \beta_b)p(\pmb\beta_b)}. $$
+This shows that while the posterior distribution is hard to calculate for any given value of $\pmb\beta$, the ratio of posteriors for any two values is easy to calculate because the constant $p(\pmb y)$ cancels out. So given two values of our parameter, we can compare their posterior likelihoods of generating the data.
+
+Suppose we have a current estimate for $\pmb \beta^{(t)}$ at iteration $t$. Given this value, we draw a new value $\pmb \beta^{*}$ from some symmetric proposal distribution $q(\cdot)$. We will come back to the specification of $q(\cdot)$ later.
+
+Given our newly proposed value $\pmb \beta^{*}$ we compute 
+
+$$\alpha(\pmb \beta^{(t)},\pmb \beta^{*})= \min \bigg\{\frac{p(\pmb\beta^{*}|\pmb y)}{p(\pmb\beta^{(t)}|\pmb y)},1 \bigg\}
+\\ = \min \bigg\{\frac{p(\pmb y | \pmb \beta^{*})p(\pmb\beta^{*})}{p(\pmb y | \pmb \beta^{(t)})p(\pmb\beta^{(t)})}, 1 \bigg\}$$
+
+We then accept our new value, $\pmb\beta^{(t+1)}=\pmb\beta^{*}$ with probability $\alpha(\pmb \beta^{(t)},\pmb \beta^{*})$, and keep our old value $\pmb\beta^{(t+1)}=\pmb\beta^{(t)}$ with probability $1-\alpha(\pmb \beta^{(t)},\pmb \beta^{*})$. 
+
+The intuition behind this is acceptance rule is:
+
+
+
+* If $\alpha(\pmb \beta^{(t)},\pmb \beta^{*})=1$, then we know $\frac{p(\pmb\beta^{*}|\pmb y)}{p(\pmb\beta^{(t)}|\pmb y)}\geq1$. That is, the new value was as or more likely to have generated the data compared to our current estimate. So, since $\pmb \beta^{(t)}$ is already in our set (i.e. has already been accepted), then $\pmb \beta^{*}$ should also be accepted. 
+* If $\alpha(\pmb \beta^{(t)},\pmb \beta^{*})<1$ then $\alpha(\pmb \beta^{(t)},\pmb \beta^{*})$ represents the desired relative frequency of $\pmb \beta^{*}$ compared to $\pmb \beta^{(t)}$. So every time we see the value at $\pmb \beta^{(t)}$, we only want to accept $\pmb \beta^{*}$ a fraction of the time (fraction is given by $\alpha(\pmb \beta^{(t)},\pmb \beta^{*})$).
+
+## The Algorithm 
+
+__Step 1__: Start with an initial value of $\pmb\beta$, $\pmb\beta^{(0)}$
+
+__Step 2__: For each iteration, using your predefined symmetric jumping rule draw a new point $\pmb\beta^{*}\sim q(\pmb\beta|\pmb\beta^{(t)})$
+
+__Step 3__: Set $\pmb\beta^{(t+1)}$ according to the following rule: $$\pmb\beta^{(t+1)} = \begin{cases} \pmb\beta^{*} &  \alpha(\pmb \beta^{(t)},\pmb \beta^{*}) = \min \bigg\{\frac{p(\pmb y | \pmb \beta^{*})p(\pmb\beta^{*})}{p(\pmb y | \pmb \beta^{(t)})p(\pmb\beta^{(t)})}, 1 \bigg\}\\ \pmb\beta^{(t)} & 1- \alpha(\pmb \beta^{(t)},\pmb\beta^{*}) \end{cases}$$
+
+Note that here
+
+$$\frac{p(\pmb y | \pmb \beta^{*})p(\pmb\beta^{*})} {p(\pmb y | \pmb \beta^{(t)})p(\pmb\beta^{(t)})} = \frac{\prod_{i=1}^n Poisson(exp(\beta_1^*+\beta_2^*x_i+\beta_3^*x_i^2))\prod_{k=1}^3exp(-\frac{(\beta_k^*)^2}{2(100)}) }{\prod_{i=1}^n Poisson(exp(\beta_1^{(t)}+\beta_2^{(t)}x_i+\beta_3^{(t)}x_i^2))\prod_{k=1}^3exp(-\frac{(\beta_k^{(t)})^2}{2(100)})}$$
+
+__Step 4__: Return to step 2.
+
+Once convergence has been reached (say, at iteration $S_0$), continue running the chain for $S$ iterations. Throw out $\pmb\beta^{(0)},...,\pmb\beta^{(S_0-1)}$ and keep $\pmb\beta^{(S_0)},...,\pmb\beta^{(S_0+S)}$ as your sample drawn from $p(\pmb\beta | \pmb y)$. 
+
+
+## Choosing a Proposal Distribution
+
+Because we are using the Metropolis algorithm, we have to choose a symmetric proposal distribution. That is, a distribution that satisfies $p(a|b) = p(b|a)$. Typical distributions include
+
+* $\text{Uniform}[\beta^{(t)}-\delta,\beta^{(t)}+\delta]$
+* $N(\beta^{(t)},\delta)$
+
+The choice of $\delta$ here will affect how quickly the algorithm converges (which we will cover more in a bit).
+
+
+__Note: This is the why the algorithm creates a Markov chain!__ We can see that these distributions are symmetric about $\beta^{(t)}$. That is, we draw our proposal from a distribution that depends only on the current iteration. We then accept/reject the proposal by comparing the proposal to our current value. This also depends on chain only through the current iteration. That is
+
+$$P(\beta^{(t+1)} = x \text{ }| \text{ }\{\beta^{(1)},...,\beta^{(t)}\}) = q(x|\beta^{(t)})\alpha(\beta^{(t)},x) \\= q(x|\beta^{(t)})\min\bigg\{\frac{p(x|y)p(x)}{p(\beta^{(t)}|y)p(\beta^{(t)})},1 \bigg\} \\= P(\beta^{(t+1)} = x \text{ }|\text{ }\beta^{(t)}) $$
+
+There are a few other criteria we also want our proposal distribution to satisfy. 
+
+  * First, we want to ensure that our target distribution allows us to sample from the entire support of of our target distribution regardless of where we start the chain (called __irreducible__). An example of a proposal distribution that would violate this could be if our target distribution $p(x)$ is defined on the integers and we chose a proposal distribution $q(x^{(t)},x^*)= \begin{cases} x^{(t)}+2 & \text{w.p. }\frac{1}{2}\\ x^{(t)}-2 & \text{w.p. }\frac{1}{2}\end{cases}$
+
+Then if we start the chain at an even number we can never reach an odd number, and vice versa.
+  
+  * We also want the chain to be __aperiodic__, which means we don't want there to be values that can only occur every $k^{th}$ iteration (for $k>1$) of the chain. We want to avoid periodicity because if the period of some point is $k$ then the relative frequency of the point in our sample would be bounded above by $1/k$. 
+
+  * Finally, the chain should be __recurrent__, meaning that every point has a positive probability of returning to itself later in the chain. We want this since if $x^{(t)}=x$ for some iteration $t$ it means $p(x)>0$, since otherwise we would not have accepted it. But if $x$ is not recurrent, as the chain continues the relative frequency of $x$ will go to zero even though $p(x)>0.$ 
+
+A convenient choice for the proposal distribution will be a multivariate normal distribution with mean $\pmb\beta^{(t)}$. Hoff writes that in many problem an efficient choice for the variance is the posterior variance, which we do not know but can estimate. In typical linear regression we know the variance of $\hat{\beta}$ will be close to $(X^TX)^{-1}\sigma^2$ and we estimate this using $(X^TX)^{-1}\hat{\sigma}^2$. 
+
+In this case we model the log of the mean of $y$ so we can estimate $\sigma^2$ with the sample variance of $\{\log(y_1+\frac{1}{2}),...,\log(y_n+\frac{1}{2}) \}$, where we add $\frac{1}{2}$ to avoid taking the log of zero.
+
+
+Now that we have defined our jumping rule, we are ready to implement the algorithm.
+
+## Implementation 
+
+
+```{r defining the algorithm function}
+# the algorithm
+
+# I'm defining a funciton to save time later
+run_mcmc = function(n,p,S, prop_var, prior_mn_beta,prior_sd_beta,beta,x){
+
+#count number accepted
+acs = 0
+
+# matrix to keep track of accepted steps in the chain
+BETA = matrix(0, nrow = S, ncol = p)
+
+# matrix to keep track of all steps in the chain
+BETA_all = matrix(0, nrow = S, ncol = p+1)
+
+set.seed(1)
+
+for(s in 1:S){
+  # propose new beta based on current beta value
+  if(p>1){
+  beta_prop = t(rmvnorm(n = 1, mean = beta, sigma = prop_var) )}
+  if(p == 1){
+    beta_prop = t(rnorm(n = 1, mean = beta, sd = sqrt(prop_var)) )
+  }
+  
+  numerator = prod(dpois(y,lambda = exp(x%*%beta_prop)))*prod(dnorm(beta_prop,mean = prior_mn_beta, sd = prior_sd_beta) )
+  
+  denominator = prod(dpois(y,lambda = exp(x%*%beta)))*prod(dnorm(beta,mean = prior_mn_beta, sd = prior_sd_beta) )
+
+  r = numerator/denominator
+  
+  if(runif(n = 1, min = 0, max = 1)< r){
+    # if accepted, update beta esimate
+    beta = beta_prop 
+    # count acceptance
+    acs = acs + 1
+  }
+  
+  #if not accepted beta does not change
+  
+  BETA[s,] = beta
+  
+  acc = (runif(n = 1, min = 0, max = 1)< r)
+  BETA_all[s,] = c(beta_prop,acc)
+}
+out_list = list(sample = BETA, proposals = BETA_all)
+
+}
+```
+
+```{r run mcmc}
+set.seed(1)
+# initiate data and priors 
+
+y = sparrow$offspring
+x = sparrow[,-1]%>%as.matrix()
+n = length(y)
+p = dim(x)[2] # dimension of beta
+
+# set prior mean (all 0)
+prior_mn_beta = rep(0,p) 
+
+# set prior standard deviation (all 10)
+prior_sd_beta = rep(10,p)
+
+# set proposal variance
+prop_var = var(log(y+0.5)) * solve(t(x)%*%x)
+
+# numberr of iterations
+S = 10000
+
+beta = rep(0,p)
+
+# run the algorithm
+mcmc_output = run_mcmc(n,p,S, prop_var, prior_mn_beta,prior_sd_beta,beta,x)
+
+BETA = mcmc_output$sample
+
+BETA_all = mcmc_output$proposals
+```
+
+I'm going to use the `coda` package here to save my data frame as an MCMC object. The package has some nice plotting/summary features (though you could easily do these with ggplot/tidyverse as well).
+
+The first set of plots show the trace plots and density plots for each of the $\pmb\beta$ components. These show the progression of the MCMC sample over the iterations and the distribution of those values.
+
+```{r}
+# save as mcmc object using coda package
+mcmcBETA = mcmc(BETA)
+
+# get trace and density plots
+plot(mcmcBETA)
+```
+
+The next plots show the autocorrelation between samples as we run along the chain. We know Markov chains are, by construction, dependent sequences. However, after some lag we would like to see low autocorrelation so that we can view the final distribution as a sort of pseudo-independent sample from our target distribution (in this case posterior distribution).
+
+```{r}
+# plot autocorrelation
+autocorr.plot(mcmcBETA)
+```
+
+Finally, we can use the `summary()` function on an MCMC object to get summary statistics for each parameter/variable that we are studying.
+
+```{r}
+# get summary statistics
+summary(mcmcBETA)
+```
+
+If we had solved this using just group means (not as a continuous function of age) we could rewrite our function by respecifying the matrix $X$ to be the design matrix with rows indicating which age group that individual belongs to. I'm going to get rid of age group 6 because there aren't very many data points.
+
+```{r}
+set.seed(1)
+# initiate data and priors 
+
+y = sparrow$offspring
+n = length(y)
+# respecify x to be 52 x 5 dimension matrix (columns indicate age group)
+x = matrix(ncol = 5, nrow = n)
+for(i in 1:5){
+  col_i = as.numeric(sparrow$age==i)
+  x[,i]=col_i
+}
+
+
+p = dim(x)[2] # dimension of beta
+
+# set prior mean (all 0)
+prior_mn_beta = rep(0,p) 
+
+# set prior standard deviation (all 10)
+prior_sd_beta = rep(10,p)
+
+# set proposal variance
+prop_var = var(log(y+0.5)) * solve(t(x)%*%x)
+
+# numberr of iterations
+S = 10000
+
+beta = rep(0,p)
+
+# run the algorithm
+mcmc_output_group = run_mcmc(n,p,S, prop_var, prior_mn_beta,prior_sd_beta,beta,x)
+
+BETA_group = mcmc_output_group$sample
+
+summary(mcmc(BETA_group))
+
+plot(mcmc(BETA_group))
+```
+
+## Studying the Posterior Distirbution
+
+```{r fig.height=3, fig.width=4}
+
+# throw out burn-in 
+samp = data.frame(BETA[2000:nrow(BETA),])%>%
+  rename(Intercept = X1, Age = X2, `Age2` = X3)
+
+samp%>%
+  pivot_longer(1:3,names_to = "parameter", values_to = "value")%>%
+  mutate(parameter = factor(parameter, levels = c("Intercept","Age","Age2")))%>%
+  ggplot(aes(x = value, color = parameter))+
+  scale_color_manual(values = wes_palette("FantasticFox1", n = 3))+
+  geom_density()+
+  facet_wrap(.~parameter, scales = "free")+
+  labs(y = "Density", x = element_blank())+
+  theme_bw()+
+  theme(legend.position = "none")
+
+```
+
+Below I'm recreating a plot in Hoff's book showing the estimated curve for the data with confidence intervals. Note that we take the empirical 0.025$^{\text{th}}$ and 0.975$^{\text{th}}$ percentiles as our confidence intervals and then just transformed the point estimates by taking the exponent to return the points to the raw scale.
+
+```{r, fig.height=3, fig.width=4}
+# possible x_i values (1, age, age^2)
+Xs = cbind(rep(1,6),1:6,(1:6)^2) 
+
+#e^xB
+eXB.post = exp(t(Xs%*%t(BETA[5000:nrow(BETA),] )) )
+
+# standard errors
+qE = apply( eXB.post,2,quantile, probs=c(.025,.5,.975))
+
+data.frame(t(qE))%>%
+  mutate(age = 1:6)%>%
+  rename(perc25 = X2.5., median = X50., perc975 = X97.5.)%>%
+  ggplot(aes(x = age))+
+  geom_line(aes(y = median), size = 1.5)+
+  geom_line(aes(y = perc25), size = 1, linetype = "dashed")+
+  geom_line(aes(y = perc975),size = 1, linetype = "dashed")+
+  theme_bw()+
+  labs(y = "Number of Offspring", x = "Age")
+
+```
+
+Again, we could also look at this by age group:
+```{r fig.height=3, fig.width=4}
+
+BETA_group%>%
+  data.frame()%>%
+  slice(8000:10000)%>%
+  rename(Age1 = X1, Age2 = X2, Age3 = X3,
+         Age4 = X4, Age5 = X5)%>%
+  pivot_longer(1:5, names_to = "Age Group", values_to = "Mean")%>%
+  mutate(Mean = exp(Mean))%>%
+  ggplot(aes(x = Mean))+
+  geom_density(aes(color = `Age Group`))+
+  theme_bw()+
+  ylim(0,1.2)
+
+```
+
+
+# Simpler Example 
+
+I'm now going to simplify the above example so we can visualize a bit better what is happening at each step.
+
+Suppose instead that $y$ comes from a Poisson distribution with log-mean dependent on age $$\log E(y | x ) = \beta x.$$
+
+Let's assume $\beta$ is 0.2 and simulate some data. We will still allow a $N(0,100)$ prior for $\beta$.
+
+```{r fig.height=3, fig.width=4}
+# the algorithm
+set.seed(1)
+
+x = sparrow$age%>%as.matrix()
+n = 52
+y = rpois(n, exp(.2*x))
+p = dim(x)[2] # dimension of beta
+
+# set prior mean (all 0)
+prior_mn_beta = rep(0,p) 
+
+# set prior standard deviation (all 10)
+prior_sd_beta = rep(10,p)
+
+# set proposal variance (times 2 because it's a bit small)
+prop_var = var(log(y+.5)) * solve(t(x)%*%x)*2 
+
+# numberr of iterations
+S = 10000
+
+beta = rep(0,p)
+
+data.frame(x = x, y = y)%>%
+  ggplot(aes(x = x, y = y, group = x))+
+  geom_boxplot(fill = "#FFDB6D", color = "#C4961A")+
+  theme_bw()+
+  labs(title = "Simulated Data", x = "Age", y = "Offspring")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+```{r}
+output_mcmc = run_mcmc(n,p,S, prop_var,prior_mn_beta,prior_sd_beta,beta,x)
+
+BETA = output_mcmc$sample
+
+BETA_all = rbind(c(0,1),output_mcmc$proposals)
+```
+
+Let's plot our sample to see if we've converged.
+
+
+```{r fig.height=3, fig.width=4}
+
+data.frame(beta = BETA, iteration = 1:nrow(BETA))%>%
+ggplot(aes(x = iteration, y = beta))+
+  geom_line(size = 0.2)+
+  theme_bw()
+
+
+data.frame(beta = BETA, iteration = 1:nrow(BETA))%>%
+ggplot(aes(x= beta))+
+  geom_density()+
+  theme_bw()
+```
+
+We can also perform posterior inference using empirical estimates from our sample.
+
+```{r}
+# throw out burn-in period
+samp = data.frame(BETA[5000:nrow(BETA)])
+colnames(samp) = "beta"
+
+paste( "Median value:",round(median(samp$beta), digits = 3))
+
+paste( "Mean value:",round(mean(samp$beta), digits = 3))
+
+paste("Empirical 95% credible interval: (",round(quantile(samp$beta,0.025), digits = 3),", " , round(quantile(samp$beta,0.975), digits = 3),")", sep = "" )
+
+
+```
+
+
+```{r, warning=F, message=FALSE}
+make_anim = T
+if(make_anim){
+
+fullmat = data.frame(beta = NULL, count = NULL, iteration = NULL)
+for(i in c(1:100)){
+  dat =  data.frame(beta = BETA[1:i,1], acc = BETA_all[1:i,2],
+           iteration = 1:i)%>%
+    mutate(beta = round(beta, digits = 4))%>%
+    mutate(iteration = i)
+ fullmat = rbind(fullmat,dat)
+}
+
+anim = data.frame(beta = BETA_all[c(1:100),1], acc = BETA_all[c(1:100),2],
+           iteration = 1:100,
+           n_acc = cumsum(BETA_all[,2])[c(1:100)] )%>%
+  mutate(acc = ifelse(acc == 1, "accept","reject"))%>%
+  ggplot(aes(x = beta))+
+  geom_histogram(data = fullmat, aes(x = beta),  fill = "gray68")+
+  geom_point(aes(y = 0,color = acc))+
+  scale_color_manual(labels = c("accept","reject"), values = c("green","red"))+
+theme_bw()+
+  transition_states(iteration)+
+  labs(title = "Iteration: {closest_state}")+
+  theme(legend.title = element_blank())
+  
+
+animate(anim, nframes = 200, fps = 8)
+
+}
+```
+
+# Choosing the Proposal Distribution
+
+Let's go back to thinking about specifying a proposal distribution. We know we have to choose a symmetric distribution for the Metropolis algorithm, but how variable should that distribution be?
+
+As a general rule, if the variance of your proposal distribution is very small, then at each iteration your proposal will not be very far from your current estimate, so $\alpha(\beta^{(t)},\beta^*)$ will usually be close to 1 and it will take a fairly long time to get proposals that are far from your initial estimate. However, if the variance of your proposal distribution is very large relative to the variance of your target distribution, you have a high chance of proposing values with low posterior probability, so $\alpha(\beta^{(t)},\beta^*)$ will often be close to 0 and you will get stuck at estimates for many iterations in a row. This will artificially inflate the proportions of the values you get stuck at. In either case it is hard to converge to the target distribution.
+
+Hoff writes that it is common practice to choose your jumping rule variance by running a number of short chains under different variance values until one is found that gives an acceptance rate of more around 20 to 50%. One you find such a value you can run the chain for longer to get your MCMC sample.
+
+Below I've included a [link to a Shiny app](https://haleykgrant.shinyapps.io/mcmc_lab_app/) where you can play around with different values of the variance of the jumping rule, number of iterations, and starting position to see how each affects convergence.
+
+The code is included here as well if you'd like to try to alter it for another distribution.
+
+```{r eval=FALSE}
+shinyApp(
+
+  ui = fluidPage(
+      sidebarLayout(
+    sidebarPanel(
+      sliderInput(inputId = "start", 
+                   label = "Starting Point: ",
+                   value = 0,
+                  min = -0.5, max = 0.5),
+      numericInput(inputId = "variance", 
+                   label = "Proposal Variance: ",
+                   value = 0.002,
+                  min = 0, step = .001),
+      sliderInput(inputId = "iter", 
+                  label = "Iterations: ", 
+                  min = 100, max = 15000,
+                  value = 1000, step = 100)
+    ),
+
+    mainPanel(
+      plotOutput("plots")
+    ))),
+
+  server = function(input, output) {
+    sparrow = readRDS("sparrow.rds")
+
+      output$plots = renderPlot({
+      out_mcmc = run_mcmc(n = 52,
+                        p=1,
+                        S = input$iter%>%as.numeric(), 
+                        prop_var = input$variance%>%as.numeric(), 
+                        prior_mn_beta = 0,
+                        prior_sd_beta = 10, 
+                        beta =input$start%>%as.numeric(),
+                        x = sparrow$age%>%as.matrix())
+      
+      all_props = out_mcmc$proposals
+      
+     ar = sum(all_props[1:200,2])/200 
+
+      p1 = data.frame(beta = out_mcmc$sample, 
+                 iter = 1:length(out_mcmc$sample))%>%
+      ggplot( aes(x =iter, y = beta))+
+        geom_line(size = 0.2)+
+        theme_bw()+
+        labs(x = "Iteration", y = "Beta")
+
+    p2 = data.frame(beta = out_mcmc$sample)%>%
+      ggplot( aes( x= beta))+
+        geom_density()+
+        theme_bw()+
+        labs(x = "Density", x = "Beta")
+    
+    gridExtra::grid.arrange(p1,p2, ncol = 2, top = paste("Acceptance ratio in first 500 iterations:", ar ))
+})
+
+  },
+
+  options = list(height = 700)
+)
+
+```
+
+<center>
+
+[![Shiny app](/Users/haleygrant/Desktop/Screen Shot 2020-04-30 at 8.59.48 AM.png){width="550" height="300"}]( https://haleykgrant.shinyapps.io/mcmc_lab_app/)
+
+</center>
+
+# Final Notes
+
+* We use MCMC when it's hard to evaluate/sample from distributions.
+
+* MH algorithms only require us to evaluate functions proportional to our target distribution, which is often easier because we don't have to worry about normalizing constants.
+
+* Gibbs sampling is a special case of Metropolis Hastings in which we use the full conditionals as jumping rules with acceptance probability of 1. This is nice when you have conjugate priors because the full conditionals are relatively easy to work with (Wikipedia has a nice list of conjugate priors [here](https://en.wikipedia.org/wiki/Conjugate_prior)). If you don't have conjugate priors, just use some other MH algorithm.
+
+* Metropolis Algorithm is a special case of MH with a symmetric jumping rule. Makes for easier computations when calculating acceptance probability.
+
+* It wasn't necessary to draw from the full joint distribution for our $q()$ function. We could have updated each element of $\pmb\beta$ at a time and calculated the acceptance ratio for each proposed update, alternating between elements at each iteration. (see page 183 of Hoff for details)
+
+* Scaling by a factor of $q()$ in the non-symmetric MH algorithm is a way to protect against oversampling points with high probability of being chosen from the proposal distribution $q()$ but not necessarily from the target distribution. 
+
+
+# References
+
+* [Motif Sampler paper](https://www.jstor.org/stable/4144382?seq=1#metadata_info_tab_contents)
+
+* [Peter Hoff's book](https://link-springer-com.proxy1.library.jhu.edu/book/10.1007/978-0-387-92407-6)
+
+* [MCMC paper with examples](https://www.casact.org/library/studynotes/MASII_mcmc_algorithms_v0.5.pdf)
+
+* [A simple introduction to Markov Chain Monte–Carlo sampling](https://link.springer.com/article/10.3758/s13423-016-1015-8)
+
+* [MCMC and Bayesian Modeling](http://www.columbia.edu/~mh2078/MachineLearningORFE/MCMC_Bayes.pdf)
+
+* [Wikipedia page on conjugate priors](https://en.wikipedia.org/wiki/Conjugate_prior)
+
+* [Normal-Normal model worked out example (posterior update)](http://www.ams.sunysb.edu/~zhu/ams570/Bayesian_Normal.pdf)
+
+

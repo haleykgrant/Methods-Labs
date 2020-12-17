@@ -1,0 +1,392 @@
+---
+title: "Lab 3"
+author: "Haley Grant"
+date: "2/19/2020"
+output:
+  html_document:
+    highlight: tango
+    number_sections: no
+    theme: cosmo
+    toc: TRUE
+    toc_float: TRUE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In today's lab we are going to continue our use of the horseshoe crab dataset to discuss another complication with count data: zero inflation.
+
+
+
+
+# Coding Example (Zero Inflation)
+
+```{r warning=FALSE, message=FALSE}
+
+# install pacman
+if(!require(pacman)){ install.packages("pacman")}
+
+# load necessary packages
+library(pacman)
+p_load(tidyverse, 
+       ggplot2,
+       janitor, #clean_names() function
+       kableExtra, #printing nice tables
+       skimr, #data summary
+       data.table,
+       pscl, # package for zero-inflated models
+       MASS,#negative binomial glm
+       extraDistr, # truncated disributions
+       vcdExtra) # test for zero inflation
+
+```
+
+
+## The Data
+
+As a reminder, here is a description of the data:
+
+These data contain information about horseshoe crab breeding. Female horseshoe crabs migrate to the shore to breed with a male crab attached to her spine, then burrows into the sand where she lays her eggs. Eggs are fertilized externally by the male. Other males may cluster around the pair and may also fertilize eggs. These males are called *satellites*. Our outcome of interest is number of satellites per female crab. We have the following data about the female crab:
+
+* color : 
+    * 1 = medium light
+    * 2 = medium
+    * 3 = medium dark
+    * 4 = dark
+* spine condition :
+    * 1 = both good
+    * 2 = one worn or broken
+    * 3 = both worn or broken
+* Carapace width in cm 
+* Weight in kg 
+
+```{r warning=FALSE, message=FALSE}
+
+crab_df = fread("http://users.stat.ufl.edu/~aa/glm/data/Crabs.dat")
+
+```
+
+As a reminder, let's look at the histogram of the outcome variable.
+
+```{r warning=FALSE, message=FALSE}
+
+# histogram of y
+p1 = crab_df%>%
+  ggplot(aes(x = y))+
+  geom_histogram(binwidth = 1, color = "black")+
+  labs(x = "# satellites")+
+  theme_bw()
+
+p1
+
+```
+
+There is a large peak at zero, but then there also appears to be another smaller peak around 3-4. Let's see if this is what we would expect from a Poisson model by simulating some data.
+
+
+```{r warning=FALSE, message=FALSE}
+# set lambda to empirical mean from data
+lambda = mean(crab_df$y)
+
+set.seed(1234)
+
+data.frame(y = rpois(n = nrow(crab_df), lambda),
+           source = rep("Simulated",nrow(crab_df)) )%>%
+  bind_rows(data.frame(y = crab_df$y, source = rep("Real Data", nrow(crab_df))))%>%
+  ggplot(aes(x = y))+
+  geom_histogram(binwidth = 1, color = "black")+
+  labs(x = "# satellites")+
+  theme_bw()+
+  facet_wrap(.~source)
+
+
+
+
+```
+
+As we might have expected, we see more zero counts in our data than would be expected from a Poisson distribution. 
+
+## Modeling Zero Inflation
+
+Agresti introduces two ways to handle zero inflation. The following section comes from section 7.4 in *Foundations of Linear and Generalized Models* (p 250-259).
+
+### ZIP
+ The first is a *zero-inflated Poisson (ZIP) model *, which assumes a mixture model with
+
+$$y_i \sim 
+\begin{cases} 0 & \text{with probability }1-\phi_i\\
+\text{Poisson}(\lambda_i) & \text{with probability } \phi_i
+\end{cases}$$
+
+The unconditional probabilities for this model are:
+
+$$P(y_i=0) = 1-\phi_i + \phi_ie^{-\lambda_i} $$
+$$P(y_i = k) = \phi_i\frac{e^{-\lambda_i}\lambda_i^k}{k!}, \text{ for } k = 1,2,... $$
+
+
+We could model parameters by
+$$\text{logit}(\phi_i) = \pmb{x}_{1i}\pmb{\beta}_1 \text{ and } \log(\lambda_i) = \pmb{x}_{2i}\pmb{\beta}_2$$
+where different sets of covariates can be used to estimate $\beta_1$ and $\beta_2$. We can also think of this as a latent variable model where 
+
+$$z_i\sim Bernoulli(\phi_i),$$ and when $z_i = 0$, $y_i = 0$ and when $z_i = 1$, $y_i\sim \text{Poisson}(\lambda_i)$ (more about this next term when EM algorithm is covered).
+
+For this mixture distribution, using the tower property (iterated expectation) we get
+$$E[y_i] = E[E(y_i|z_i)] = E[0*I_{z_i=0}+\lambda_i*I_{z_i=1} ] = \lambda_i*P(z_i=1) = \phi_i\lambda_i$$
+
+Also,
+$$E[var(y_i|z_i)]=E[0*I_{z_i=0}+\lambda_i*I_{z_i=1} ]=\phi_i\lambda_i $$
+$$var[E(y_i|z_i)]=var[0*I_{z_i=0}+\lambda_i*I_{z_i=1}] = \lambda_i^2\phi_i(1-\phi_i) $$
+Hence,
+
+$$var(y_i) = E[var(y_i|z_i)]+var[E(y_i|z_i)] $$
+$$= \phi_i\lambda_i+\lambda_i^2\phi_i(1-\phi_i) $$
+$$=\lambda_i\phi_i[1+\lambda_i(1-\phi_i)] $$
+
+Note that $\lambda_i>0$ and $(1-\phi_i)>0$ and hence $\lambda_i\phi_i[1+\lambda_i(1-\phi_i)]>\lambda_i\phi_i = E[y_i]$.
+So this model is overdispersed compared to a usual Poisson model.
+
+__Disadvantages of ZIP:__
+
+* ZIP requires estimating many parameters (now have two vectors of parameters, $\pmb{\beta}_1$ and $\pmb{\beta}_2$). 
+
+* Still models the mean as the same of the variance in the Poisson part of the mixture (overdispersion still could be an issue). Zero inflated negative binomial (ZINB) could be more appropriate in this case. However, ZINB models are often harder to estimate because they allow for two sources of overdispersion--excess zeros and dispersion parameter.
+
+* Note that ZIP is not nested in Poisson so typical tests aren't appropriate. Can use Vuong statistic to measure goodness of fit (test for non-nested hypotheses).
+
+
+### Hurdle Models
+
+Another option is a two-part modeling approach called hurdle models. One part is a binary model (such as logistic or probit) for whether the outcome is zero or positive. If the outcome is positive the "hurdle is crossed," and conditional on the positive response, the second part of the model uses a truncated distribution. This modeling approach can handle zero inflation and zero deflation. Similar to the previous case we can consider
+$P(y_i>0)=\pi_i$ and $P(y_i=0)=1-\pi_i$ and that the conditional distribution of $\{y_i | y_i>0\}$ follows a truncated probability mass function $f(y_i;\mu_i)$. Then the complete distribution is 
+$$P(y_i=0)=1-\pi_1 $$
+$$P(y_i = k)=\pi_i\frac{f(k; \mu_i)}{1-f(0;\mu_i)} \text{ for } k=1,2,... $$
+
+Where again we could model $\pi_i$ and $\mu_i$ separately. The joint likelihood function for the two-part hurdle model is 
+
+$$\mathcal{l}(\pmb{\beta}_1,\pmb{\beta}_2) = \prod_{i=1}^n(1-\pi_i)^{I(y_i=0)}\bigg[\pi_i\frac{f(y_i;\mu_i)}{1-f(0;\mu_i)}\bigg]^{1-I(y_i=0)} $$
+
+### What's the difference?
+
+The two models above seem pretty similar. Their main differences are mostly found in their assumptions about the data generating process. 
+
+* Hurdle models can also model zero deflation.
+
+* Zero inflated models assume that the distribution is a mixture of two distributions, one that is necessarily 0, and one that can be zero but can also take on other values. 
+
+__An example:__ Here's an example where a zero-inflated model may be accurate. Consider a survey of people asking how many times they've tested positive for ovarian cancer. There will be a large subset of the population that will necessarily have a zero recorded (i.e. people who do not have ovaries or have never been tested), but there can also be people who do have been tested who have never gotten a positive result.
+
+* Hurdle models assume all zeros come from a "structural" source and models the data generating process in two steps, once when a zero can occur, and then a second step assuming a zero did not occur.
+
+__An example:__ Now consider a similar survey where we ask about duration ovarian cancer before remission. In this example, the only way to get a zero is if the individual has never had ovarian cancer. After we "cross the hurdle" (i.e. someone is diagnosed with ovarian cancer) we know the length must be longer than 0 and therefore the only zeros must come from the first structural part of the model.
+
+## Implementing Zero-Inflated Models in R
+
+First let's implement the model in a toy example by generating data from a point mass at zero with probability 0.2 and with probability 0.8 generating from a Poisson(3) distribution. 
+
+```{r}
+n = 1000
+
+set.seed(1234)
+df = data.frame(z = 1-rbernoulli(n, p = 0.2)%>%as.numeric())%>%
+  mutate(count = rpois(n, lambda = 3))%>%
+  mutate(count = ifelse(z == 0, 0, count))
+
+# check that probability of zeros is correct
+length(which(df$z==0))/nrow(df)
+
+# fit zero inflated model
+summary(zeroinfl(count~1, data = df))
+```
+
+Fitting a zero-inflated model like this gives output that comes in two parts:
+
+1. The model for the counts (Poisson, negative binomial, etc.)
+
+2. The model for the mixture probability (default logit link)
+
+Note that we can use different sets of covariates to predict each (shown later).
+
+
+```{r}
+
+# estimate mixing probability
+exp(-1.33630)/(1+exp(-1.33630))
+
+# mean of Poisson
+exp(1.06234)
+
+```
+
+We can see that we do a pretty good job estimating both the mixture probability and the mean of the Poisson model. 
+
+### Intercept-Only Models
+
+We will now continue to follow Agresti's example using the horseshoe crab data.
+
+First, we will check intercept-only models, not taking into account that the distribution of $Y$ may change at different levels of the covariates. We start by comparing Poisson and negative binomial models.
+
+```{r}
+# fit poisson log-linear model
+summary(glm(y~1, family = poisson, data = crab_df))
+
+# check log likelihood
+logLik(glm(y~1, family = poisson, data = crab_df))
+
+# fit negative binomial model (from MASS package)
+summary(glm.nb(y~1, data = crab_df))
+
+# check log likelihood
+logLik(glm.nb(y~1, data = crab_df))
+```
+Here we see the negative binomial model has a significantly higher log likelihood than the Poisson model. The estimated dispersion parameter for the negative binomial model is $1/\hat{\theta} = 1/.758 = 1.32$.
+
+Now let's try fitting zero-inflated models.
+
+```{r}
+# zero inflated Poisson
+summary(zeroinfl(y~1, data = crab_df) )
+
+```
+
+
+
+The output of this model tells us that the estimated mixing probability is $$\hat{\phi} = \text{logit}^{-1}(-0.6139) = \frac{e^{-0.6139}}{1+e^{-0.6139}} = 0.351.$$
+That is,
+
+$$y_i \sim
+\begin{cases}
+0 & \text{ with probability } 0.351\\
+\text{Poisson}(e^{ 1.50385}=4.499) & \text{ with probability } 0.649
+\end{cases}$$
+
+We can also fit a zero-inflated negative binomial (ZINB) model
+
+```{r}
+summary(zeroinfl(y~1, data = crab_df, dist = "negbin"))
+
+```
+
+This tells us that the mixing probability is $\frac{e^{-0.7279}}{1+e^{-0.7279}}=0.326$. That is, with probability 0.326 $y_i$ is a point mass at zero and with probability $1-0.326 = 0.674$ $y_i$ follows a negative binomial distribution with mean $e^{1.46527} = 4.33$ and dispersion parameter $\frac{1}{4.4605}=0.22$.
+
+### Incorportating Covariates
+
+Now let's turn to incorporating predictors in the model. Recall from lab 2 that weight and width were highly correlated, so we will only include one of them in the model. Recall also that weight seemed to be the most important predictor for $y.$ 
+
+Let's plot the data just subsetting to our observations where the outcome was zero.
+```{r warning=FALSE}
+
+crab_df%>%
+  mutate(z = ifelse(y==0, "zero","non-zero"))%>%
+  ggplot(aes(x = weight, fill = z))+
+  geom_histogram(binwidth = 0.5, color = "black")+
+  scale_fill_manual(values = c("blue","yellow"))+
+  theme_bw()+
+  theme(legend.title = element_blank())
+
+crab_df%>%
+  mutate(z = ifelse(y==0, "zero","non-zero"))%>%
+  ggplot(aes(x = spine, fill = z))+
+  geom_bar(color = "black")+
+  scale_fill_manual(values = c("blue","yellow"))+
+  theme_bw()+
+  theme(legend.title = element_blank())
+
+crab_df%>%
+  mutate(z = ifelse(y==0, "zero","non-zero"))%>%
+  ggplot(aes(x = color, fill = z))+
+  geom_bar(color = "black")+
+  scale_fill_manual(values = c("blue","yellow"))+
+  theme_bw()+
+  theme(legend.title = element_blank())
+
+```
+
+```{r}
+# ZINB model using weight as predictor of outcome and weight + color as predictor of zeros
+
+summary(zeroinfl(y ~ weight| weight + color , dist = "negbin", data = crab_df))
+```
+
+
+
+This model tells us that the mixing probability is modeled as
+
+$$\text{logit}(\hat{\phi}_i) = 1.8662 -1.7531*weight_i+0.5985*color_i $$
+
+That is, the probability of being a point mass at 0 vs a binomial model is a function of weight and color.
+
+We also get that with probability $1-\hat{\phi}_i$ we have a negative binomial distribution with mean modeled by 
+
+$$\log(\hat{\mu}_i)=0.8961+0.2169*weight_i $$
+and dispersion parameter estimate $1/4.8558=0.21.$
+
+## Implementing the Hurdle Model
+
+We can also implement a hurdle model. Let's simulate some data so we can see how this model works.
+
+```{r}
+# simulate probability that we get a zero from bernoulli (0.2)
+# after we simulated 0s, simulate count from truncated poisson(4) for nonzero observations
+n = 1000
+
+set.seed(1234)
+df = data.frame(z = 1-rbernoulli(n, p = 0.2)%>%as.numeric())%>%
+  mutate(count = rtpois(n, lambda = 4, a = 0))%>%
+  mutate(count = ifelse(z ==0, 0, count))
+
+
+summary(hurdle(count~1, data = df))
+
+# probability of being 0 = 1-phi
+1-exp(1.33702)/(1+exp( 1.33702))
+
+# mean of truncated 
+exp(1.35349)
+
+
+```
+
+
+Here we see that the hurdle model does a reasonably good job estimating the mixing probability and the mean of our truncated Poisson distribution (slightly underestimates mean). 
+
+
+
+## Test for Zero-Inflation
+
+One way to test for zero-inflation is to fit a regular GLM and a zero-inflated model and compare models using the Vuong test statistics. We can do this using the data we just simulated:
+
+```{r}
+
+## fit a negative binomial model
+m1 <- glm(count ~ 1, data = df, family = poisson)
+
+## fit a zero-inflated negative binomial model
+m1_zi <- zeroinfl(count ~ 1,
+               data = df)
+## compare 2 models
+vuong(m1, m1_zi)
+
+
+```
+
+Here we see that we have strong evidence of zero-inflation since the second model fits significantly better.
+
+We can also use a score test (van den Broek, 1995) to test for excess zeros in Poisson data. 
+
+```{r}
+# score test
+zero.test(df$count)
+
+```
+
+Here, again, we see evidence of excess zeros, indicated by the low p-value. For comparison, if we run this test on truly Poisson-distributed data with no zero inflation we get something like:
+
+```{r}
+
+set.seed(123)
+zero.test(rpois(100, 3))
+
+```
+
+

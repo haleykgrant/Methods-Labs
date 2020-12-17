@@ -1,0 +1,610 @@
+---
+title: "Lab 2: The EM Algorithm"
+author: "Haley Grant"
+date: "4/2/2020"
+output:
+  html_document:
+    highlight: tango
+    number_sections: no
+    theme: cosmo
+    toc: TRUE
+    toc_float: TRUE
+    code_folding: hide
+    
+---
+
+<style>
+pre code, pre, code {
+  white-space: pre !important;
+  overflow-x: scroll !important;
+  word-break: keep-all !important;
+  word-wrap: initial !important;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(width=200)
+```
+
+# EM Overview
+
+I'm going to begin this lab by showing you a [YouTube video](https://www.youtube.com/watch?v=iQoXFmbXRJA) that I found extremely helpful in understanding the EM algorithm. 
+
+<center>
+
+[![EM video](/Users/haleygrant/Downloads/0.jpg){width="350" height="250"}](https://www.youtube.com/watch?v=iQoXFmbXRJA "EM video")
+
+
+![](/Users/haleygrant/Desktop/Screen Shot 2020-04-10 at 11.16.15 AM.png){width=600px}
+</center>
+
+
+Some important things to note:
+
+* When we run an EM algorithm for a mixture model, we assume we know how many clusters/distributions are in our mixture. We typically do not assume we know the corresponding parameters for those mixtures (unless we have some prior knowledge we want to incorporate).
+* We should be careful about our starting values of our parameters. __Think:__ what would happen if I chose to start with the exact same parameters (means and variances equal) for both normal distributions in the example above?
+* Essentially we are iterating between assigning a probability that each point comes from each of the possible distributions at the current iteration, then using those probabilities to fine tune our estimates of our parameters, using these posterior probabilities as weights.
+
+```{r load packages, warning = F, message = F}
+# load packages
+
+library(pacman)
+p_load(ggplot2,
+       gganimate,
+       tidyverse,
+       knitr,
+       kableExtra,
+       readr,
+       janitor,
+       lme4, # for fitting linear mixed models
+       lattice) # for plotting random effects
+
+
+```
+
+# EM Example (Mixture of Poissons)
+
+## Simulate Data
+
+Now, let's consider an EM algorithm for a simple case where we have a mixture of two Poisson distributions (so we don't have to estimate so many parameters). That is, suppose we know our data come from two Poisson distributions, but we don't know the means of these distributions, nor do we know the corresponding proportions/probabilities that our data are drawn from each of the distributions. 
+
+![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0054.jpg){width=350px}
+
+Let's simulate some data. Choose $\lambda_1 = 3$ and $\lambda_2 = 8$ with mixing probabilities $\frac{1}{6}$ and $\frac{5}{6}$. Then our data will look something like this.
+
+```{r simulate data, warning = F, message = F}
+set.seed(123)
+# proportions for each distirbution
+n1 = rbinom(n = 1, size = 1000, p = 1/6)
+n2 = 1000-n1
+
+
+
+
+set.seed(123)
+# simulate with corresponding probability/proportion
+sim_mixture = c(rpois(n = n1, lambda = 3), rpois(n = n2, lambda = 8))
+
+
+data.frame(x = sim_mixture, mixture = as.character(c(rep("Sample 1",n1),rep("Sample 2",n2))))%>%
+  bind_rows(data.frame(x = sim_mixture, mixture = "Mixture" ))%>%
+  ggplot(aes(x = x, fill = mixture))+
+  geom_histogram(binwidth = 1)+
+  theme_bw()+
+  facet_wrap(.~mixture, nrow = 2)+
+  scale_fill_viridis_d()
+
+
+
+```
+
+## Deriving the Algorithm
+
+![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0055.jpg){width=350px}
+
+### Likelihood Specification 
+
+Now, given our data we can also write down our likelihood with respect to our parameter vector $\pmb\theta = (\theta_1, \theta_2, \lambda_1, \lambda_2).$ 
+
+![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0056.jpg){width=500px}
+
+### E step
+
+Now we begin the steps of the EM algorithm by first defining our $Q$ function.
+
+![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0057.jpg){width=600px}
+
+
+
+Notice that the only parts that depend on $u$ are the indicators. Everything else will be unchanged by taking the expectation, since $\pmb{y}$ and $\pmb\theta$ are taken to be given in this step.
+
+
+
+
+![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0058.jpg)
+
+
+
+
+So we can plug these back into our $Q$ function and since nothing else depends on $u$ now (has been integrated out) we can move to maximizing $Q$ over our unknown variables.
+
+
+![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0059.jpg){width=400px}
+
+### M Step
+
+Now we take derivative with respect to our various parameters to maximize $Q$.
+
+Maximizing with respect to $\theta_1$ and $\theta_2$:
+
+![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0060.jpg){width=350px}
+
+Maximizing with respect to $\lambda_1$ and $\lambda_2$:
+
+![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0062.jpg){width=400px}
+
+
+So these are our estimates for $\theta_1,\theta_2,\lambda_1, \text{ and }\lambda_2$ at each iteration.
+
+## Implementing in R
+
+Now, let's implement this using our data. First we must set initial values of our unknown parameters. Let's begin with $$\theta_0 = (\frac{1}{2},\frac{1}{2},\bar{y}-1,\bar{y}+1) $$
+
+At each iteration, we will keep track of:
+
+* $\theta^{(t)}_1$ and $\theta^{(t)}_2 = 1-\theta^{(t)}_1$
+* $\hat{\lambda}_1$ and $\hat{\lambda}_2$
+* $Q_{\theta^{(t)}}$
+* Observed data log likelihood $l(\theta^{(t)}|\pmb{y})$
+* The posterior probabilities $\tilde{u}_{i1}$ and $\tilde{u}_{i2}$
+
+What is the observed data likelihood at any given iteration?
+
+![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0063.jpg){width=350px}
+
+
+
+```{r run EM, warning = F, message = F}
+
+run_EM = FALSE
+if(run_EM){
+# make data frame to save theta values
+theta = data.frame(th1 = .5, th2 = .5, l1 = round(mean(sim_mixture)-1), l2 = round(mean(sim_mixture)+1))
+
+# keep track of Q functions
+Q_fun = c()
+
+# keep track of observed log likelihoods 
+ll = c()
+
+u = data.frame(iteration = NULL, sample_point = NULL, posterior_prob = NULL)
+
+# check for convergence 
+delta = 10
+
+while(abs(delta)>1e-20){
+  i = nrow(theta)
+  y = sim_mixture
+  
+  th1 = theta$th1[i]
+  th2 = theta$th2[i]
+  l1 = theta$l1[i]
+  l2 = theta$l2[i]
+  
+  # P(u_i = 1 | y, theta)
+  ui1 = function(x){
+    exp(-l1)*l1^x*th1/(exp(-l1)*l1^x*th1+exp(-l2)*l2^x*th2)
+  }
+  
+  # P(u_i = 2 | y, theta)
+  ui2 = function(x){
+    exp(-l2)*l2^x*th2/(exp(-l1)*l1^x*th1+exp(-l2)*l2^x*th2)
+  }
+  
+  # f1 at current lambda estimates
+  f1 = function(x){
+    exp(-l1)*l1^x/factorial(x)
+  }
+  
+  # f2 at current lambda estimates
+  f2 = function(x){
+    exp(-l2)*l2^x/factorial(x)
+  }
+
+  u = bind_rows(u,data.frame(iteration = i, sample_point = unique(y), posterior_prob = sapply(unique(y), FUN = ui1)))
+  # update thetas with mean ui1 and ui2
+  th1_new = mean(sapply(y, ui1))
+  th2_new = mean(sapply(y, ui2))
+  
+  l1_new = mean(y*sapply(y, ui1))/th1_new
+  l2_new = mean(y*sapply(y, ui2))/th2_new
+  
+    # f1 at current lambda estimates
+  f1_new = function(x){
+    exp(-l1_new)*l1_new^x/factorial(x)
+  }
+  
+  # f2 at current lambda estimates
+  f2_new = function(x){
+    exp(-l2_new)*l2_new^x/factorial(x)
+  }
+
+  
+  # Q value at new theta
+  Q_new = sum(sapply(y, FUN = ui1)*(log(th1_new)+log(sapply(y, f1_new)))+
+            sapply(y, FUN = ui2)*(log(th2_new)+log(sapply(y, f2_new))))
+  
+  # update Q
+  Q_fun = c(Q_fun, Q_new)
+  
+  # update theta
+  theta = bind_rows(theta, data.frame(th1 = th1_new, th2 = th2_new, l1 = l1_new, l2 = l2_new))
+  
+  # update delta with |theta^{t+1}-theta^{t}|/|theta^{t}|
+  delta = norm(matrix(as.numeric(theta[i,])-as.numeric(theta[(i+1),])))/norm(matrix(as.numeric(theta[i,])))
+  
+  # calculate observed log likelihood
+  obs_ll = sum(log(th1_new*dpois(y,l1_new)+th2_new*dpois(y, l2_new)))
+  
+  # update observed log likelihood
+  ll = c(ll, obs_ll)
+  }
+
+saveRDS(theta, "theta.rds")
+saveRDS(Q_fun, "Q_fun.rds")
+saveRDS(ll, "ll.rds")
+saveRDS(u, "u.rds")
+}
+
+```
+
+## Visualizations
+
+Here I show the values of our parameters ($\theta_1$,$\theta_2$, $\lambda_1$, and $\lambda_2$), the Q function, and observed data log likelihood at each iteration of the algorithm implemented above.
+
+```{r plots, warning=FALSE, message=FALSE }
+if(!run_EM){
+  theta = readRDS( "theta.rds")
+  Q_fun = readRDS( "Q_fun.rds")
+  ll = readRDS("ll.rds")
+  u = readRDS("u.rds")
+}
+
+theta%>%
+ mutate(iteration = 1:nrow(theta))%>%
+  select(th1,th2, iteration)%>%
+  pivot_longer(1:2, names_to = "theta")%>%
+  ggplot(aes(x = iteration, y = value, color = theta))+
+  geom_line()+
+  theme_bw()
+
+theta%>%
+ mutate(iteration = 1:nrow(theta))%>%
+  select(l1,l2, iteration)%>%
+  pivot_longer(1:2, names_to = "lambda")%>%
+  ggplot(aes(x = iteration, y = value, color = lambda))+
+  geom_line()+
+  theme_bw()
+
+
+
+data.frame(Q = Q_fun)%>%
+  mutate(iteration = seq(1,length(Q_fun)))%>%
+  ggplot(aes(x = iteration, y = Q))+
+  geom_point(size = .5)+
+  labs(title = "Q function convergence")+
+  theme_bw()  
+
+data.frame(obs_loglik = ll, iteration = seq(1,length(ll)))%>%
+  ggplot(aes(x = iteration, y = obs_loglik))+
+  geom_point(size = .5)+
+  theme_bw()+
+  labs(title = "Observed Data Log Likelihood Convergence", y = "Observed Log Likelihood")
+  
+
+```
+
+We can also try to look at what is happening when we maximize the Q function at each iteration. It is a function of 4 (or 3 if you consider take $\theta_2=1-\theta_1$) variables, so I plot the Q function with respect to each parameter to give a sense of how t.he algorithm is working (note we are constrained to $\theta_2=1-\theta_1$) 
+
+
+```{r Q_fun animation, warning = FALSE, message = FALSE}
+y = sim_mixture
+sims = FALSE
+
+if(sims){
+Q_theta1 = function(th1){
+  ui1 = function(x){exp(-l1)*l1^x*th1/(exp(-l1)*l1^x*th1+exp(-l2)*l2^x*th2)}
+  ui2 = function(x){exp(-l2)*l2^x*th2/(exp(-l1)*l1^x*th1+exp(-l2)*l2^x*th2)}
+  f1 = function(x){ exp(-l1)*l1^x/factorial(x)}
+  f2 = function(x){ exp(-l2)*l2^x/factorial(x)}
+  
+  sum(sapply(y, FUN = ui1)*(log(th1)+log(sapply(y, f1)))+
+            sapply(y, FUN = ui2)*(log(th2)+log(sapply(y, f2))))
+  
+}
+
+Q_theta2 = function(th2){
+  ui1 = function(x){exp(-l1)*l1^x*th1/(exp(-l1)*l1^x*th1+exp(-l2)*l2^x*th2)}
+  ui2 = function(x){exp(-l2)*l2^x*th2/(exp(-l1)*l1^x*th1+exp(-l2)*l2^x*th2)}
+  f1 = function(x){ exp(-l1)*l1^x/factorial(x)}
+  f2 = function(x){ exp(-l2)*l2^x/factorial(x)}
+  
+  sum(sapply(y, FUN = ui1)*(log(th1)+log(sapply(y, f1)))+
+            sapply(y, FUN = ui2)*(log(th2)+log(sapply(y, f2))))
+  
+}
+
+Q_lambda1 = function(l1){
+  ui1 = function(x){exp(-l1)*l1^x*th1/(exp(-l1)*l1^x*th1+exp(-l2)*l2^x*th2)}
+  ui2 = function(x){exp(-l2)*l2^x*th2/(exp(-l1)*l1^x*th1+exp(-l2)*l2^x*th2)}
+  f1 = function(x){ exp(-l1)*l1^x/factorial(x)}
+  f2 = function(x){ exp(-l2)*l2^x/factorial(x) }
+  
+  sum(sapply(y, FUN = ui1)*(log(th1)+log(sapply(y, f1)))+
+            sapply(y, FUN = ui2)*(log(th2)+log(sapply(y, f2))))
+}
+
+Q_lambda2 = function(l2){
+  ui1 = function(x){exp(-l1)*l1^x*th1/(exp(-l1)*l1^x*th1+exp(-l2)*l2^x*th2)}
+  ui2 = function(x){exp(-l2)*l2^x*th2/(exp(-l1)*l1^x*th1+exp(-l2)*l2^x*th2)}
+  f1 = function(x){ exp(-l1)*l1^x/factorial(x)}
+  f2 = function(x){ exp(-l2)*l2^x/factorial(x) }
+  
+  sum(sapply(y, FUN = ui1)*(log(th1)+log(sapply(y, f1)))+
+            sapply(y, FUN = ui2)*(log(th2)+log(sapply(y, f2))))
+}
+
+Qs = data.frame(iteration = NULL, parameter = NULL, x = NULL, Q = NULL)
+
+for(i in 1:60){
+  params = theta[i,]
+  th1 = params$th1
+  th2 = params$th2
+  l1 = params$l1
+  l2 = params$l2
+  qth1 = c()
+  for(j in seq(0,1,by = .01)){
+    q = Q_theta1(j)
+    qth1 = c(qth1,q)
+  }
+  qth2 = c()
+  for(j in seq(0,1,by = .01)){
+    q = Q_theta2(j)
+    qth2 = c(qth2,q)
+  }
+  ql1 = c()
+  for(j in seq(0,15,by = .1)){
+    q = Q_lambda1(j)
+    ql1 = c(ql1,q)
+  }
+  ql2 = c()
+  for(j in seq(0,15,by = .1)){
+    q = Q_lambda2(j)
+    ql2 = c(ql2,q)
+  }
+  
+  Qs = bind_rows(Qs, data.frame(iteration = i,
+                                parameter = c(rep("theta1",length(qth1)),
+                                              rep("theta2",length(qth1)),
+                                              rep("lambda1",length(ql1)),
+                                              rep("lambda2",length(ql2))),
+                                param_value = c(rep(th1,length(qth1)),
+                                                rep(th2,length(qth2)),
+                                              rep(l1,length(ql1)),
+                                              rep(l2,length(ql2))),
+                                next_value = c(rep(theta[i+1,]$th1,length(qth1)),
+                                               rep(theta[i+1,]$th2,length(qth2)),
+                                              rep(theta[i+1,]$l1,length(ql1)),
+                                              rep(theta[i+1,]$l2,length(ql2))),
+                                x = c(seq(0,1,by = .01),
+                                      seq(0,1,by = .01),
+                                      seq(0,15,by = .1),
+                                      seq(0,15,by = .1)),
+                 Q = c(qth1,qth2,ql1,ql2)))
+}
+
+Qs.max = Qs%>%group_by(iteration, parameter)%>%slice(which.min(abs(x-param_value)))
+
+anim_Q = Qs%>%
+  ggplot(aes(x = x, y = Q))+
+  geom_line()+
+  geom_point(data = Qs.max, aes(x = next_value, y = Q), color = "red")+
+  transition_states(iteration)+
+  facet_wrap(.~parameter, scales = "free_x",nrow = 2)+
+  theme_bw()+
+  labs(subtitle = "Iteration = {frame}", title = "Q Function Maximization")
+
+saveRDS(anim_Q, "anim_Q.rds")
+
+
+}
+
+readRDS("anim_Q.rds")
+
+
+```
+
+Finally, here is a visualization of the two Poisson distributions (and recitative proportions) that the algorithm estimates at each iteration.
+
+```{r gganimate, warning=FALSE, message=FALSE }
+
+# limit to first 50 iterations (doesn't change much after)
+
+if(sims){
+sim_data = data.frame(iteration = NULL, value = NULL)
+for(i in 1:50){
+  params = theta[i,]
+  pdf1 = dpois(x=0:20, lambda=params$l1)*params$th1
+  pdf2 = dpois(x=0:20, lambda=params$l2)*params$th2
+  pdf =pdf1 + pdf2
+  
+  sim_data = bind_rows(sim_data, data.frame(iteration = i, x = 1:21, combined = pdf, f1 = pdf1, f2 = pdf2, l1 = params$l1, l2 = params$l2))
+  
+}
+
+saveRDS(sim_data, "sim_data.rds")
+}
+
+if(!sims){
+ sim_data = readRDS("sim_data.rds")}
+
+
+sim_data%>%
+  full_join(data.frame(table(sim_mixture))%>%rename(x = sim_mixture, "Simulated Data"= Freq)%>%mutate(x = as.numeric(as.character(x)))%>%
+              mutate(`Simulated Data` = `Simulated Data`/sum(`Simulated Data`)), by = "x")%>%
+    filter(iteration<=50)%>%
+  full_join(u%>%rename(x = sample_point)%>%filter(iteration<=50), by = c("iteration","x"))%>%
+  na.omit()%>%
+   ggplot(aes(x = x))+
+    geom_histogram(aes(x =  x, y=`Simulated Data`),binwidth = 1, fill = "grey", alpha = .6, stat = "identity")+
+  geom_vline(aes(xintercept = l1), color ="#238A8DFF", linetype = "dashed" )+
+  geom_vline(aes(xintercept = l2), color = "#FDE725FF", linetype = "dashed")+
+  geom_density(aes(y = combined ), color = "#440154FF",stat = "identity")+
+  geom_density(aes(y = f1), color = "#238A8DFF",stat = "identity")+
+  geom_density(aes(y = f2), color = "#FDE725FF",stat = "identity")+
+  scale_fill_viridis_c(begin = 0.4, end = 1, direction = -1)+
+  theme_bw()+
+  transition_states(iteration)+
+  labs(y = "Density (scaled)", title = "Iteration = {frame}", fill = "Posterior Probability")+
+  geom_point(shape = 21, aes(x = x, y = -.005, fill =  posterior_prob),color = "#440154FF", size = 3, stroke = .3)
+  
+
+
+
+```
+
+We can also start our at different estimates of $\pmb\theta_0$. Note that in this simple example, we find a true global maximum every time so we don't have to worry about the local max/inflection point issue, but in general it's good to run your algorithm from multiple starting points.
+
+```{r diff starting points, message=FALSE, warning=FALSE}
+theta_runs = data.frame(th1 = NULL, th2 = NULL, l1 = NULL, l2 = NULL, obs_ll = NULL)
+for(run in 1:25){
+
+y = sim_mixture
+th1 = runif(n = 1, min = 0, max = 1)
+th2 = 1-th1
+l1 = sample(seq(1,20), 1)
+l2 = sample(setdiff(seq(1,20),l1),1)
+
+# check for convergence 
+delta = 10
+
+
+while(abs(delta)>1e-8){
+  
+
+  
+  # P(u_i = 1 | y, theta)
+  ui1 = function(x){
+    exp(-l1)*l1^x*th1/(exp(-l1)*l1^x*th1+exp(-l2)*l2^x*th2)
+  }
+  
+  # P(u_i = 2 | y, theta)
+  ui2 = function(x){
+    exp(-l2)*l2^x*th2/(exp(-l1)*l1^x*th1+exp(-l2)*l2^x*th2)
+  }
+  
+  # f1 at current lambda estimates
+  f1 = function(x){
+    exp(-l1)*l1^x/factorial(x)
+  }
+  
+  # f2 at current lambda estimates
+  f2 = function(x){
+    exp(-l2)*l2^x/factorial(x)
+  }
+
+  
+  # update thetas with mean ui1 and ui2
+  th1_new = mean(sapply(y, ui1))
+  th2_new = mean(sapply(y, ui2))
+  
+  l1_new= mean(y*sapply(y, ui1))/th1_new
+  l2_new = mean(y*sapply(y, ui2))/th2_new
+
+  
+  # update delta with |theta^{t+1}-theta^{t}|/|theta^{t}|
+  delta = norm(matrix(c(th1_new,th2_new,l1_new,l2_new)-c(th1,th2,l1,l2)))/norm(matrix(c(th1,th2,l1,l2) ))
+  
+  th1 = th1_new
+  th2 = th2_new
+  
+  l1 = l1_new
+  l2 = l2_new
+
+}
+
+# calculate observed log likelihood
+  obs_ll = sum(log(th1*dpois(y,l1)+th2*dpois(y, l2)))
+
+  theta_runs = bind_rows(theta_runs, data.frame(l1 = l1, l2 = l2, th1 = th1, th2= th2, ll = obs_ll))
+}
+
+print(theta_runs)
+
+```
+
+# More Complicated Settings
+
+This was a fairly straightforward example of applying the EM algorithm. We had a mixture of only two Poisson distributions, and the parameters separated nicely in our likelihood. What happens when this is not the case?
+
+On your homework assignment you are given the following problem:
+
+For each observation $i$, we independently draw from two distributions:
+
+$$a_i\sim Bernoulli(q) \text{ and } \mu_i\sim N(\mu,1).$$
+Now, given $a_i$ and $\mu_i$, we draw a data point in the following way
+
+$$y_i \sim \begin{cases}N(\mu_i+1,\sigma^2) & \text{ if }a_i=1\\N(\mu_i-1,\sigma^2) & \text{ if }a_i=0 \end{cases} $$
+This nested model scenario is slightly more complicated. To see why, let's write out the full data likelihood (including both missing components $a_i$ and $\mu_i$). Let's denote our fixed unknown parameters as $\pmb\theta = (\mu, \sigma^2,q)$ and our missing data as $\pmb{a} = (a_1,...,a_n)$ and $\pmb{u }= (\mu_1,...,\mu_n)$.
+
+$$L(\pmb\theta|\pmb{y},\pmb{u},\pmb{a})=f(\pmb{y},\pmb{u},\pmb{a}|\pmb\theta)=f(\pmb{y}|\pmb{u},\pmb{a},\pmb\theta)f(\pmb{u}|\pmb{a},\pmb\theta)f(\pmb{a}|\pmb\theta) $$
+Note that $\pmb{a}$ and $\pmb{u}$ are drawn independently (though later, conditional on data they are no longer independent), so we can simplify this to 
+
+$$L = \color{blue}{f(\pmb{y}|\pmb{u},\pmb{a},\pmb\theta)}\color{ purple}{f(\pmb{u}|\pmb\theta)}\color{magenta}{f(\pmb{a}|\pmb\theta)} \\ = \prod_{i=1}^n\color{blue}{\phi(\mu_i+1,\sigma^2)^{I(a_i=1)}\phi(\mu_i-1,\sigma^2)^{I(a_i=0)}}\color{purple}{\phi(\mu,1)}\color{magenta}{q^{I(a_i=1)}(1-q)^{I(a_i=0)}}$$
+where $\phi()$ denoted the pdf of a normal distribution.
+
+$$\implies \ell = \log L = \sum_{i=1}^n I(a_i=1)\Big[\log q + \log\phi(\mu_i+1,\sigma^2) + \log\phi(\mu,1)\Big]+I(a_i=0)\Big[\log (1-q) + \log\phi(\mu_i-1,\sigma^2) + \log\phi(\mu,1)\Big]. $$
+
+The E step of the EM algorithm involves taking the following conditional expectation: 
+
+$$Q = E_{\pmb{u},\pmb{a}|\pmb{y},\pmb\theta} \ell $$
+That is, we must take the expectation of the log likelihood with respect to the conditional distribution of $u$ and $a$ given our data and parameter estimates at the current iteration. 
+ This expectation, written out fully is 
+$$E_{\pmb{u},\pmb{a}|\pmb{y},\pmb\theta}\bigg[\sum_{i=1}^n \color{red}{I(a_i=1)}\Big[\log q -\frac{1}{2}\log2\pi - \frac{1}{2}\log2\sigma^2 - \frac{1}{2\sigma^2}\color{red}{(y_i-(\mu_i+1))^2} -\frac{1}{2}\log2\pi - \frac{1}{2}\color{red}{(\mu_i-\mu)^2}\Big]\\+\color{red}{I(a_i=0)}\Big[\log (1-q) -\frac{1}{2}\log2\pi - \frac{1}{2}\log2\sigma^2 - \frac{1}{2\sigma^2}\color{red}{(y_i-(\mu_i-1))^2} -\frac{1}{2}\log2\pi - \frac{1}{2}\color{red}{(\mu_i-\mu)^2}\Big] \bigg] $$
+
+This term involves taking expectations such as $$E_{\mu_i,a_i|y_i,\pmb\theta}\bigg[I(a_i=k)\mu_i^2\bigg] \text{ and } E_{\mu_i,a_i|y_i,\pmb\theta}\bigg[I(a_i=k)\mu_i\bigg] $$
+where $k \in \{0,1\}$.
+
+Note that given the observed data, $\pmb{u}$ and $\pmb{a}$ are no longer independent. So we can't just factor the joint pdf into the product of independent components. 
+
+__What do we do in this case?__ Hint: taking the joint expectation is hard but we can use some common tricks about conditional expectations to make them more manageable.
+
+# Resources
+
+Here are some additional resources I've found helpful:
+
+EM:
+
+* https://tinyheero.github.io/2016/01/03/gmm-em.html
+
+* http://rstudio-pubs-static.s3.amazonaws.com/1001_3177e85f5e4840be840c84452780db52.html
+
+* https://medium.com/@chloebee/the-em-algorithm-explained-52182dbb19d9
+
+Bayesian Inference (Gibbs Sampling, Posterior Updates, etc.)
+
+* [A First Course in Bayesian Statistical Methods, Peter D. Hoff](https://link-springer-com.proxy1.library.jhu.edu/book/10.1007/978-0-387-92407-6) (Available through JHU library [SpringerLINK Database](https://databases.library.jhu.edu/databases/database/JHU05015))
+
+# Lecture 2 Exercises 
+
+Hongkai gave two quick exercises for you to do yourself in his second lecture. I got some questions on them so figured I would post my solutions to them in case you want to see them written out.
+
+![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0064.jpg){width=300px}
+![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0065.jpg){width=300px}
+
+
+![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0066.jpg)
+
+
+![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0067.jpg){width=300px}
