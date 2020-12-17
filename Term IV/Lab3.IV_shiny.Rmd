@@ -517,7 +517,7 @@ theme_bw()+
   labs(title = "Iteration: {closest_state}")+
   theme(legend.title = element_blank())
 
-animate(anim, nframes = 200, fps = 8)
+animate(anim, nframes = 200, fps = 5)
 
 }
 ```
