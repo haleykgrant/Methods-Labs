@@ -25,7 +25,7 @@ Term IV:
   * Lab 3: 
       * MCMC
       * Metropolis algorithm: intuition, derivation and example 
-      * Shiny app for choosing proposal distribution
+      * Shiny app for choosing proposal distribution (there is a separate file for the shiny app since I post all files as html documents for students on the course website and shiny app didn't embed properly in html)
   * Lab 4:
       * Review of fourth term materials
 
