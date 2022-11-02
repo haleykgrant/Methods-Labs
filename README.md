@@ -1,5 +1,5 @@
 # Methods-Labs
-Labs for advanced methods in biostatistics III-IV (140.753-140.754), Johns Hopkins Bloomberg School of Public Health. These files are the Rmd files I used to create html files (also included) when TAing this course. 
+Labs for advanced methods in biostatistics III-IV (140.753-140.754), Johns Hopkins Bloomberg School of Public Health. These files are the Rmd files I used to create html files (also included) when TAing this course. All files are included to knit the markdown files.
 
 The topics covered by each lab are:
 
