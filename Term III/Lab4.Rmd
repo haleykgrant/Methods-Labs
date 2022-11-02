@@ -155,7 +155,7 @@ __What's the point?__ We model our data in terms of the mean, but our parameter 
 
 <center>
 
-![(Here $\gamma(\cdot)$ is $b(\cdot)$)](/Users/haleygrant/Downloads/link.png)
+![(Here $g\cdot)$ is $b(\cdot)$)](./Images/linkfunction.png)
 
 </center>
 
@@ -305,7 +305,7 @@ We can also check our model fit to see if we do significantly better than an int
 
 <center>
 
-![image from this [online tutorial](https://bookdown.org/egarpor/PM-UC3M/glm-deviance.html)](/Users/haleygrant/Downloads/deviance.png){width=300px}
+![image from this [online tutorial](https://bookdown.org/egarpor/PM-UC3M/glm-deviance.html)](./Images/DevianceSchematic.png){width=300px}
 
 </center>
 
@@ -401,7 +401,8 @@ where $\phi>1$ represents overdispersion compared to the standard model which as
 
 Consider the following:
 
-![](/Users/haleygrant/Desktop/Screen Shot 2020-03-06 at 3.47.51 PM.png){width=450px}
+![](./Images/QL1.png){width=400px}
+
 
 
 
@@ -409,7 +410,7 @@ We will show that $U$ defined above behaves like a score (and thus $Q$ behaves l
 
 
 
-![](/Users/haleygrant/Desktop/Screen Shot 2020-03-06 at 3.48.32 PM.png){width=350px}
+![](./Images/QL2.png){width=350px}
 
 
 
@@ -419,7 +420,8 @@ and we define the quasidevaince as:
 
 <center>
 
-![](/Users/haleygrant/Desktop/Screen Shot 2020-03-06 at 3.56.41 PM.png){width=275px}
+  ![](./Images/QL3.png){width=275px}
+
 
 </center>
 
@@ -428,7 +430,7 @@ We can use $Q$ in the same way we use the log likelihood to estimate $\hat{\beta
 
 
 
-![](/Users/haleygrant/Desktop/Screen Shot 2020-03-06 at 3.58.34 PM.png){width=450px}
+![](./Images/QL4.png){width=450px}
 
 
 __Note__ that Hongkai introduces QLs starting with $U$ while Agresti starts with $u(\beta)$. Now it should be obvious how the two relate ($U$ is a quasi-score w.r.t. $\mu$ and $u(\beta)$ is the quasi-score for $\beta$).
@@ -441,7 +443,7 @@ Also note the ingredients you need are:
 
 We now continue with our typical algorithm to solve for the MLE:
 
-![](/Users/haleygrant/Desktop/Screen Shot 2020-03-06 at 4.15.28 PM.png){width=475px}
+![](./Images/QL5.png){width=475px}
 
 
 Recall that the asymptotic variance of $\hat{\beta}$ is $$var(\hat{\beta}):=i_\beta = a(\phi)(D^TV^{-1}D)^{-1} $$
@@ -459,7 +461,7 @@ In a retrospective study, we fix our outcome (say, disease status) columns and t
 
 <center>
 
-![](/Users/haleygrant/Desktop/Screen Shot 2020-03-06 at 9.45.48 PM.png){width=250px}
+![](./Images/ContingencyTable.png){width=250px}
 
 </center>
 
@@ -476,7 +478,7 @@ Note that we fix the outcomes $y_i$, so we can only estimate $Pr(x_i=1|y_i=k)$ f
 
 <center>
 
-![](/Users/haleygrant/Desktop/Screen Shot 2020-03-06 at 10.00.13 PM.png){width=400px}
+![](./Images/BayesStep.png){width=400px}
 
 </center>
 
@@ -487,9 +489,9 @@ However, consider the intercept, which models the (log) odds rather than the (lo
 That is,
 
 $$z_i = \begin{cases}1 & \text{if person } i \text{ is sampled}\\0 &  \text{otherwise} \end{cases} $$
-![](/Users/haleygrant/Desktop/Screen Shot 2020-03-06 at 10.15.14 PM.png){width=450px}
+![](./Images/Retrospect1.png){width=450px}
 
-![](/Users/haleygrant/Desktop/Screen Shot 2020-03-06 at 10.15.42 PM.png){width=300px}
+![](./Images/Retrospect2.png){width=300px}
 
 
 So if we model a retrospective study using the typical logistic model, the coefficients associated with predictors (non-intercept terms) retain their typical interpretation, but the __interpretation of the intercept changes__. Note that __with this data alone we cannot estimate the intercept term because we fix the number of cases and controls__ (can’t estimate probability of each being chosen if they are not chosen randomly).
@@ -539,7 +541,7 @@ Notice that under this conditional likelihood structure, the $a_i$ terms fell ou
 
 There are multiple ways to model contingency table data. Consider a $k\times m$ contingency table (i.e. we have a  categorical variable with $k$ levels and one with $m$ levels) with a total count of $N$. One way we could model this is with a multinomial distribution. Under the hypothesis of independence we have:
 
-![](/Users/haleygrant/Desktop/Screen Shot 2020-03-07 at 2.04.57 PM.png){width=450px}
+![](./Images/Multinomial.png){width=450px}
 
 Under the null hypothesis of independence we get
 $$\hat{\pi}_{ij}=\hat{\pi}_{i+}\hat{\pi}_{+j}\\=\frac{y_{i+}y_{+j}}{N^2} $$
@@ -552,7 +554,7 @@ We can plug these estimates back into our likelihood to get a deviance test or c
 
 Another way we can model this data is by considering each cell in the contingency table tot be drawn from an independent Poisson distribution. A fully saturated model for this distribution would be to fit a model with one parameter per cell, and thus each observation will be the estimated mean for that cell. This is also equivalent to fitting a model with a covariate for each level of each variable after baseline and all two-way interaction terms. For example, in the $2\times 2$ case we would have:
 
-![](/Users/haleygrant/Desktop/Screen Shot 2020-03-07 at 2.28.50 PM.png){width=400px}
+![](./Images/Poisson.png){width=400px}
 
 We could also formulate this for the $k\times m$ case as:
 

@@ -33,10 +33,8 @@ I'm going to begin this lab by showing you a [YouTube video](https://www.youtube
 
 <center>
 
-[![EM video](/Users/haleygrant/Downloads/0.jpg){width="350" height="250"}](https://www.youtube.com/watch?v=iQoXFmbXRJA "EM video")
+[![EM video](./Images/YoutubeVid.png){width="350" height="250"}](https://www.youtube.com/watch?v=iQoXFmbXRJA "EM video")
 
-
-![](/Users/haleygrant/Desktop/Screen Shot 2020-04-10 at 11.16.15 AM.png){width=600px}
 </center>
 
 
@@ -69,7 +67,7 @@ p_load(ggplot2,
 
 Now, let's consider an EM algorithm for a simple case where we have a mixture of two Poisson distributions (so we don't have to estimate so many parameters). That is, suppose we know our data come from two Poisson distributions, but we don't know the means of these distributions, nor do we know the corresponding proportions/probabilities that our data are drawn from each of the distributions. 
 
-![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0054.jpg){width=350px}
+![](./Images/PoissonMixture.jpg){width=350px}
 
 Let's simulate some data. Choose $\lambda_1 = 3$ and $\lambda_2 = 8$ with mixing probabilities $\frac{1}{6}$ and $\frac{5}{6}$. Then our data will look something like this.
 
@@ -101,19 +99,20 @@ data.frame(x = sim_mixture, mixture = as.character(c(rep("Sample 1",n1),rep("Sam
 
 ## Deriving the Algorithm
 
-![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0055.jpg){width=350px}
+![](./Images/LatentVar.jpg){width=350px}
 
 ### Likelihood Specification 
 
 Now, given our data we can also write down our likelihood with respect to our parameter vector $\pmb\theta = (\theta_1, \theta_2, \lambda_1, \lambda_2).$ 
 
-![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0056.jpg){width=500px}
+![](./Images/Likelihood.jpg
+){width=500px}
 
 ### E step
 
 Now we begin the steps of the EM algorithm by first defining our $Q$ function.
 
-![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0057.jpg){width=600px}
+![](./Images/EM1.jpg){width=600px}
 
 
 
@@ -122,7 +121,7 @@ Notice that the only parts that depend on $u$ are the indicators. Everything els
 
 
 
-![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0058.jpg)
+![](./Images/EStep.jpg)
 
 
 
@@ -130,7 +129,7 @@ Notice that the only parts that depend on $u$ are the indicators. Everything els
 So we can plug these back into our $Q$ function and since nothing else depends on $u$ now (has been integrated out) we can move to maximizing $Q$ over our unknown variables.
 
 
-![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0059.jpg){width=400px}
+![](./Images/SubstituteStep.jpg){width=400px}
 
 ### M Step
 
@@ -138,11 +137,11 @@ Now we take derivative with respect to our various parameters to maximize $Q$.
 
 Maximizing with respect to $\theta_1$ and $\theta_2$:
 
-![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0060.jpg){width=350px}
+![](./Images/Maximize_theta.jpg){width=350px}
 
 Maximizing with respect to $\lambda_1$ and $\lambda_2$:
 
-![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0062.jpg){width=400px}
+![](./Images/Maximize_lambda.jpg){width=400px}
 
 
 So these are our estimates for $\theta_1,\theta_2,\lambda_1, \text{ and }\lambda_2$ at each iteration.
@@ -161,7 +160,7 @@ At each iteration, we will keep track of:
 
 What is the observed data likelihood at any given iteration?
 
-![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0063.jpg){width=350px}
+![](./Images/ObsLikelihood.jpg){width=350px}
 
 
 
@@ -600,11 +599,11 @@ Bayesian Inference (Gibbs Sampling, Posterior Updates, etc.)
 
 Hongkai gave two quick exercises for you to do yourself in his second lecture. I got some questions on them so figured I would post my solutions to them in case you want to see them written out.
 
-![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0064.jpg){width=300px}
-![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0065.jpg){width=300px}
+![](./Images/InClassProb.jpg){width=300px}
+![](./Images/InClassProb2.jpg){width=300px}
 
 
-![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0066.jpg)
+![](./Images/InClassProb3.jpg)
 
 
-![](/Users/haleygrant/Library/Mobile Documents/com~apple~CloudDocs/IMG_0067.jpg){width=300px}
+![](./Images/InClassProb4.jpg){width=300px}

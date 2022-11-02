@@ -97,7 +97,7 @@ p_load(ggplot2,
 ```
 
 ```{r message=F}
-dat = read_csv("http://www.bodowinter.com/uploads/1/2/9/3/129362560/politeness_data.csv")
+dat = read_csv("politeness_data-2691.csv")
 
 head(dat)
 
@@ -210,9 +210,9 @@ We can check the predicted (fitted) random effects for each subject and compare 
 dat%>%
   group_by(subject)%>%
   summarise(mean = mean(frequency, na.rm = T))%>%
-  bind_cols(coef(fit.randint)$subject[1])%>%
-  bind_cols(fixef(fit.randint)['(Intercept)'] + ranef(fit.randint)$subject)%>%
-  rename(`Observed` = mean, `Fitted` = `(Intercept)`, `Int. + Rand. Int.` = `(Intercept)1`,Subject = subject )%>%
+  bind_cols(Fitted = coef(fit.randint)$subject[,1])%>%
+  bind_cols(`Int. + Rand. Int.`=fixef(fit.randint)['(Intercept)']%>%unname() + ranef(fit.randint)$subject[,1])%>%
+  rename(`Observed` = mean, Subject = subject )%>%
   kable( align = "c")%>%
   kable_styling(bootstrap_options = "striped", full_width = F)
 

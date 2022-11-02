@@ -32,6 +32,7 @@ p_load(tidyverse,
        kableExtra, #printing nice tables
        skimr, #data summary
        gganimate, #turn ggplots into animations
+       transformr,#turn ggplots into animations
        data.table, #read in table from URL
        AER, #overdispersion tests
        DHARMa) #overdispersion tests
@@ -313,10 +314,11 @@ Below I give a visual example of how the Newton Raphson algorithm works. First, 
 ## The data
 ```{r}
 # the data (only choosing one covariate so I can show the method in 1D)
-df = read.delim("Ex0107.txt")  
+df = read.table("Ex0107.txt",header = T)  
 design = df%>%
   dplyr::select(3)%>%
   data.frame()
+
 response = df$y_response
 ```
 
