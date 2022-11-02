@@ -7,6 +7,7 @@ Term III:
   * Lab 1:
       * Data analysis basics
       * Fitting and interpreting generalized linear models (GLMs) (with data example)
+      Preview at: https://htmlpreview.github.io/?https://github.com/haleykgrant/Methods-Labs/blob/main/Term%20IIII/HTML%20Output%20Files/Lab1.IV.html
   * Lab 2:
       * Poisson models and overdispersion (with data example)
       * Newton-Raphson algorithm and visualization
